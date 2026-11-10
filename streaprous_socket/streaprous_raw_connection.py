@@ -83,7 +83,8 @@ conn_struct = namedtuple('conn_struct', [
     'ssthresh',
     'dup_acks',
     'last_ack_seq',
-    'mss'
+    'mss',
+    'congestion_state'
 ])
 
 
@@ -118,7 +119,8 @@ def create_connection_struct(client_ip, client_port, server_ip, server_port, sta
         ssthresh=cc['ssthresh'],
         dup_acks=cc['dup_acks'],
         last_ack_seq=cc['last_ack_seq'],
-        mss=cc['mss']
+        mss=cc['mss'],
+        congestion_state=cc['congestion_state']
     )
 
 

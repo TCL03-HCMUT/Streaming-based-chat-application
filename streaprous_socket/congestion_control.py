@@ -1,43 +1,78 @@
 """Congestion Control Module (TCP Reno: Slow Start, Congestion Avoidance, Fast Retransmit)."""
+from enum import Enum
+from .streaprous_raw_connection import conn_struct
 
 DEFAULT_MSS = 1460
 DEFAULT_SSTHRESH = 65535
 
+class CongestionPhase(Enum):
+    SLOW_START = 1
+    CONGESTION_AVOIDANCE = 2
+    FAST_RECOVERY = 3
 
 def init_congestion_control(initial_seq: int = 0, mss: int = DEFAULT_MSS):
     return {
-        'cwnd': float(mss),
+        'cwnd': mss,
         'ssthresh': DEFAULT_SSTHRESH,
         'dup_acks': 0,
         'last_ack_seq': initial_seq,
-        'mss': mss
+        'mss': mss,
+        'congestion_state': CongestionPhase.SLOW_START
     }
 
 
-def on_ack_received(session, ack_seq: int):
+def on_ack_received(session: conn_struct, ack_seq: int):
     # TODO: Handle new ACK vs Duplicate ACK
-    # If ack_seq > session.last_ack_seq:
-    #   dup_acks = 0
-    #   If cwnd < ssthresh (Slow Start):
-    #     cwnd += mss
-    #   Else (Congestion Avoidance):
-    #     cwnd += mss * (mss / cwnd)
-    #   last_ack_seq = ack_seq
-    #
-    # Elif ack_seq == session.last_ack_seq:
-    #   dup_acks += 1
-    #   If dup_acks == 3 (Trigger Fast Retransmit):
-    #     ssthresh = max(int(cwnd / 2), 2 * mss)
-    #     cwnd = ssthresh + 3 * mss
-    #   Elif dup_acks > 3 (Fast Recovery):
-    #     cwnd += mss
-    pass
+    cwnd = session.cwnd
+    ssthresh = session.ssthresh
+    dup_acks = session.dup_acks
+    last_ack = session.last_ack_seq
+    mss = session.mss
+    congestion_state = session.congestion_state
+    new_state = congestion_state
+    
+    # New ACK
+    if ack_seq > session.last_ack_seq:
+        dup_acks = 0
+        match congestion_state:
+            case CongestionPhase.SLOW_START:
+                cwnd += mss
+                if cwnd >= ssthresh:
+                    new_state = CongestionPhase.CONGESTION_AVOIDANCE
+            case CongestionPhase.CONGESTION_AVOIDANCE:
+                cwnd += mss * (mss / cwnd)
+            case CongestionPhase.FAST_RECOVERY:
+                cwnd = ssthresh
+                new_state = CongestionPhase.CONGESTION_AVOIDANCE
+        last_ack = ack_seq
+    # Duplicate ACK
+    elif ack_seq == last_ack:
+        if congestion_state == CongestionPhase.FAST_RECOVERY:
+            cwnd += mss
+        else:
+            dup_acks += 1
+            if dup_acks == 3:
+                ssthresh = max(int(cwnd / 2), 2 * mss)
+                cwnd = ssthresh + 3 * mss
+                new_state = CongestionPhase.FAST_RECOVERY
+                
+    return session._replace(
+        cwnd=cwnd, 
+        ssthresh=ssthresh, 
+        dup_acks=dup_acks, 
+        last_ack_seq=last_ack, 
+        congestion_state=new_state
+    )
 
 
-def on_timeout_detected(session):
-    # TODO: Handle loss event from RTO timeout
-    # ssthresh = max(int(cwnd / 2), 2 * mss)
-    # cwnd = float(mss)
-    # dup_acks = 0
-    pass
+def on_timeout_detected(session: conn_struct):
+    cwnd = session.cwnd
+    ssthresh = session.ssthresh
+    dup_acks = session.dup_acks
+    mss = session.mss
+    
+    ssthresh = max(int(cwnd / 2), 2 * mss)
+    cwnd = mss
+    dup_acks = 0
+    return session._replace(cwnd=cwnd, ssthresh=ssthresh, dup_acks=dup_acks, congestion_state=CongestionPhase.SLOW_START)
 
