@@ -31,28 +31,7 @@ def on_ack_received(session, ack_seq: int):
     #     cwnd = ssthresh + 3 * mss
     #   Elif dup_acks > 3 (Fast Recovery):
     #     cwnd += mss
-    cwnd = session.cwnd
-    ssthresh = session.ssthresh
-    dup_acks = session.dup_acks
-    last_ack = session.last_ack_seq
-    mss = session.mss
-
-    if ack_seq > last_ack:
-        dup_acks = 0
-        if cwnd < ssthresh:
-            cwnd += mss
-        else:
-            cwnd += mss * (mss / cwnd)
-        last_ack = ack_seq
-    elif ack_seq == last_ack and len(session.retrans_queue) > 0:
-        dup_acks += 1
-        if dup_acks == 3:
-            ssthresh = max(int(cwnd / 2), 2 * mss)
-            cwnd = ssthresh + 3 * mss
-        elif dup_acks > 3:
-            cwnd += mss
-
-    return session._replace(cwnd=cwnd, ssthresh=ssthresh, dup_acks=dup_acks, last_ack_seq=last_ack)
+    pass
 
 
 def on_timeout_detected(session):
@@ -60,7 +39,5 @@ def on_timeout_detected(session):
     # ssthresh = max(int(cwnd / 2), 2 * mss)
     # cwnd = float(mss)
     # dup_acks = 0
-    mss = session.mss
-    new_ssthresh = max(int(session.cwnd / 2), 2 * mss)
-    return session._replace(ssthresh=new_ssthresh, cwnd=float(mss), dup_acks=0)
+    pass
 

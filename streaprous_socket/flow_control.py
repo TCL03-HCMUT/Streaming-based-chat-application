@@ -15,14 +15,14 @@ def init_flow_control():
 
 def update_peer_window(session, win_size: int):
     # TODO: Update peer's advertised receive window (rwnd) from incoming TCP header
-    return session._replace(rwnd=win_size)
+    pass
 
 
 def get_send_allowance(session) -> int:
     # TODO: Calculate allowable bytes to transmit based on flow control window
     # flight_size = session.server_seq - session.snd_una
     # allowance = max(0, session.rwnd - flight_size)
-    return max(0, session.rwnd - (session.server_seq - session.snd_una))
+    pass
 
 
 def should_send_window_probe(session, current_time: float) -> bool:
@@ -31,8 +31,5 @@ def should_send_window_probe(session, current_time: float) -> bool:
     # Check if:
     #   1. session.rwnd == 0
     #   2. (current_time - session.last_probe_time) >= session.probe_interval
-    if session.rwnd == 0 and (current_time - session.last_probe_time >= session.probe_interval):
-        return True
-    return False
-
+    pass
 

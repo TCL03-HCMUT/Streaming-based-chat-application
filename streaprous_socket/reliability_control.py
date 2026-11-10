@@ -31,10 +31,7 @@ def prune_acknowledged_segments(session, ack_seq: int, current_time: float):
     # TODO: Remove segments where seq + len(payload) <= ack_seq from retrans_queue
     # Update session.snd_una to ack_seq
     # Compute sample RTT for fully acknowledged segments and update RTO
-    new_queue = [seg for seg in session.retrans_queue if seg['seq'] + len(seg['payload']) > ack_seq]
-    new_snd_una = max(session.snd_una, ack_seq)
-    return session._replace(retrans_queue=new_queue, snd_una=new_snd_una)
-
+   pass
 
 def check_retransmission_timeout(session, current_time: float):
     # TODO: Inspect earliest packet in retrans_queue
@@ -43,13 +40,7 @@ def check_retransmission_timeout(session, current_time: float):
     #   Return (updated_session, packet_to_retransmit)
     # Else:
     #   Return (session, None)
-    if session.retrans_queue:
-        earliest = session.retrans_queue[0]
-        if current_time - earliest['send_time'] > session.rto:
-            new_rto = min(60.0, session.rto * 2.0)
-            earliest['send_time'] = current_time
-            return session._replace(rto=new_rto), earliest
-    return session, None
+    pass
 
 
 def handle_incoming_data(session, pkt_seq: int, payload: bytes):
