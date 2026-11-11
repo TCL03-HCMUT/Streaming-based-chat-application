@@ -790,8 +790,10 @@ def run_conn_recv(s: socket.socket, conn_info: conn_struct) -> bytes:
                         # TODO: Update peer window, prune acknowledged segments, and update congestion window
                         session = update_peer_window(session, win_size)
                         session = prune_acknowledged_segments(session, pkt_ack, time.time())
-                        session = on_ack_received(session, pkt_ack)
+                        session, should_retransmit = on_ack_received(session, pkt_ack)
                         connections[client_key] = session
+                        
+                        # TODO: (Reliability) handle retransmit
 
             # Handle data payload (PSH + ACK) or (ACK with data) - Fast path ACK
             # Some clients may not set PSH flag for small requests

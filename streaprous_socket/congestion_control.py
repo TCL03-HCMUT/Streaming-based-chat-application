@@ -1,6 +1,8 @@
 """Congestion Control Module (TCP Reno: Slow Start, Congestion Avoidance, Fast Retransmit)."""
 from enum import Enum
-from .streaprous_raw_connection import conn_struct
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .streaprous_raw_connection import conn_struct
 
 DEFAULT_MSS = 1460
 DEFAULT_SSTHRESH = 65535
@@ -30,6 +32,7 @@ def on_ack_received(session: conn_struct, ack_seq: int):
     mss = session.mss
     congestion_state = session.congestion_state
     new_state = congestion_state
+    should_retransmit = False
     
     # New ACK
     if ack_seq > session.last_ack_seq:
@@ -46,7 +49,15 @@ def on_ack_received(session: conn_struct, ack_seq: int):
                 new_state = CongestionPhase.CONGESTION_AVOIDANCE
         last_ack = ack_seq
     # Duplicate ACK
-    elif ack_seq == last_ack:
+    # According to RFC 5681: DUPLICATE ACKNOWLEDGMENT: An acknowledgment is considered a
+    # "duplicate" in the following algorithms when (a) the receiver of
+    # the ACK has outstanding data, (b) the incoming acknowledgment
+    # carries no data, (c) the SYN and FIN bits are both off, (d) the
+    # acknowledgment number is equal to the greatest acknowledgment
+    # received on the given connection (TCP.UNA from [RFC793]) and (e)
+    # the advertised window in the incoming acknowledgment equals the
+    # advertised window in the last incoming acknowledgment.
+    elif ack_seq == last_ack and len(session.retrans_queue) > 0:
         if congestion_state == CongestionPhase.FAST_RECOVERY:
             cwnd += mss
         else:
@@ -55,6 +66,7 @@ def on_ack_received(session: conn_struct, ack_seq: int):
                 ssthresh = max(int(cwnd / 2), 2 * mss)
                 cwnd = ssthresh + 3 * mss
                 new_state = CongestionPhase.FAST_RECOVERY
+                should_retransmit = True
                 
     return session._replace(
         cwnd=cwnd, 
@@ -62,7 +74,7 @@ def on_ack_received(session: conn_struct, ack_seq: int):
         dup_acks=dup_acks, 
         last_ack_seq=last_ack, 
         congestion_state=new_state
-    )
+    ), should_retransmit
 
 
 def on_timeout_detected(session: conn_struct):
