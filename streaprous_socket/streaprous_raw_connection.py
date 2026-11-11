@@ -45,9 +45,9 @@ from .flow_control import (
 )
 from .reliability_control import (
     init_reliability_control,
-    update_rtt_rto,
-    prune_acknowledged_segments,
-    check_retransmission_timeout,
+    update_rtt_and_timeout,
+    prune_acked_segments,
+    check_timeout,
     handle_incoming_data,
 )
 from .congestion_control import (
@@ -73,12 +73,12 @@ conn_struct = namedtuple('conn_struct', [
     'rcv_wnd', # sender's own buffer
     'last_probe_time',
     'probe_interval',
-    'snd_una',
-    'retrans_queue',
+    'send_base',
+    'unacked_queue',
     'rcv_buffer',
-    'rto',
-    'srtt',
-    'rttvar',
+    'timeout_interval',
+    'estimated_rtt',
+    'deviation_rtt',
     'cwnd',
     'ssthresh',
     'dup_acks',
@@ -91,9 +91,10 @@ def create_connection_struct(client_ip, client_port, server_ip, server_port, sta
                              server_seq, client_seq, expected_final_ack, last_activity=None):
     if last_activity is None:
         last_activity = time.time()
-    fc = init_flow_control()
     rc = init_reliability_control(server_seq)
+    fc = init_flow_control()
     cc = init_congestion_control(server_seq)
+
     return conn_struct(
         client_ip=client_ip,
         client_port=client_port,
@@ -104,16 +105,19 @@ def create_connection_struct(client_ip, client_port, server_ip, server_port, sta
         client_seq=client_seq,
         expected_final_ack=expected_final_ack,
         last_activity=last_activity,
+
+        send_base=rc['send_base'],
+        unacked_queue=rc['unacked_queue'],
+        timeout_interval=rc['timeout_interval'],
+        estimated_rtt=rc['estimated_rtt'],
+        deviation_rtt=rc['deviation_rtt'],
+        rcv_buffer=rc['rcv_buffer'],
+
         rwnd=fc['rwnd'],
         rcv_wnd=fc['rcv_wnd'],
         last_probe_time=fc['last_probe_time'],
         probe_interval=fc['probe_interval'],
-        snd_una=rc['snd_una'],
-        retrans_queue=rc['retrans_queue'],
-        rcv_buffer=rc['rcv_buffer'],
-        rto=rc['rto'],
-        srtt=rc['srtt'],
-        rttvar=rc['rttvar'],
+
         cwnd=cc['cwnd'],
         ssthresh=cc['ssthresh'],
         dup_acks=cc['dup_acks'],
@@ -560,8 +564,8 @@ def accept(s: socket.socket, listen_ip: str, listen_port: int, interface_name: s
                         state="SYN_RCVD",
                         server_seq=server_seq,
                         client_seq=pkt_seq,
-                        expected_final_ack=server_seq + 1,
-                        snd_una=server_seq,
+                        expected_final_ack=server_seq + 1, # -> receiver ?
+                        send_base=server_seq,  # -> sendBase in sender
                         last_ack_seq=server_seq,
                         last_activity=time.time()
                     )
@@ -615,7 +619,7 @@ def accept(s: socket.socket, listen_ip: str, listen_port: int, interface_name: s
                                 state="ESTABLISHED",
                                 server_seq=pkt_ack,
                                 client_seq=pkt_seq,
-                                snd_una=pkt_ack,
+                                send_base=pkt_ack,
                                 last_ack_seq=pkt_ack,
                                 last_activity=time.time()
                             )
@@ -655,7 +659,7 @@ def accept(s: socket.socket, listen_ip: str, listen_port: int, interface_name: s
                         state="ESTABLISHED",
                         server_seq=pkt_ack,
                         client_seq=pkt_seq,
-                        snd_una=pkt_ack,
+                        send_base=pkt_ack,
                         last_ack_seq=pkt_ack,
                         last_activity=time.time()
                     )
@@ -787,7 +791,7 @@ def run_conn_recv(s: socket.socket, conn_info: conn_struct) -> bytes:
                         session = connections[client_key]
                         # TODO: Update peer window, prune acknowledged segments, and update congestion window
                         session = update_peer_window(session, win_size)
-                        session = prune_acknowledged_segments(session, pkt_ack, time.time())
+                        session = prune_acked_segments(session, pkt_ack, time.time())
                         session = on_ack_received(session, pkt_ack)
                         connections[client_key] = session
 
@@ -872,7 +876,7 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
         total_len = len(payload)
         offset = 0
 
-        while offset < total_len or len(session.retrans_queue) > 0:
+        while offset < total_len or len(session.unacked_queue) > 0:
             now = time.time()
             with connections_lock:
                 if client_key not in connections:
@@ -880,7 +884,7 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
                 session = connections[client_key]
 
                 # TODO: Window allowance calculation: min(cwnd, rwnd) - in_flight
-                flight_size = session.server_seq - session.snd_una
+                flight_size = session.server_seq - session.send_base
                 effective_window = min(session.cwnd, session.rwnd)
                 allowance = max(0, int(effective_window - flight_size))
 
@@ -894,19 +898,19 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
                         seq=session.server_seq, ack_seq=session.client_seq, payload=chunk
                     )
 
-                    new_queue = list(session.retrans_queue)
+                    new_queue = list(session.unacked_queue)
                     new_queue.append({'seq': session.server_seq, 'payload': chunk, 'send_time': now})
 
                     offset += chunk_len
                     allowance -= chunk_len
                     session = session._replace(
                         server_seq=session.server_seq + chunk_len,
-                        retrans_queue=new_queue,
+                        unacked_queue=new_queue,
                         last_activity=now
                     )
 
-                # TODO: Check RTO retransmission timeout
-                session, retrans_pkt = check_retransmission_timeout(session, now)
+                # TODO: Check timeout_interval 
+                session, retrans_pkt = check_timeout(session, now)
                 if retrans_pkt:
                     send_tcp_data_segment(
                         s, listen_ip, client_ip, listen_port, client_port,
