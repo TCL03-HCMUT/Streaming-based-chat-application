@@ -810,36 +810,29 @@ def run_conn_recv(s: socket.socket, conn_info: conn_struct) -> bytes:
                     print(f"[Streap_raw] Received payload: {raw_payload[:100]}...")
                     
                     # TODO (Slide 71, 75, 88): Process in-order delivery vs out-of-order buffering/discarding
-                    deliverable_payload = b""
                     with connections_lock:
                         if client_key in connections:
                             session = connections[client_key]
                             session, deliverable_payload, next_ack = handle_incoming_data(session, pkt_seq, raw_payload)
                             connections[client_key] = session._replace(last_activity=time.time())
-                            
-                            # Calculate buffer_
-                            unhandled_bytes = len(deliverable_payload) + sum(len(chunk) for chunk in session.rcv_buffer.values())
-                            last_byte_read = session.client_seq - unhandled_bytes
-                            advertised_rwnd = calculate_advertised_window(session, last_byte_read)
-                            
-                            server_ip = session.server_ip
-                            server_seq = session.server_seq
                         else:
                             deliverable_payload = raw_payload
                             next_ack = pkt_seq + len(raw_payload)
-                            advertised_rwnd = 65535
-                            server_ip = listen_ip
-                            server_seq = 0
+
+                    # --- Calculate Advertised Window ---
+                    unhandled_bytes = len(deliverable_payload) + sum(len(chunk) for chunk in session.rcv_buffer.values())
+                    last_byte_read = session.client_seq - unhandled_bytes
+                    advertised_rwnd = calculate_advertised_window(session, last_byte_read)
 
                     # Send cumulative ACK along with window size
                     ack_packet = build_tcp_packet(
-                        server_ip, client_ip, listen_port, client_port,
-                        seq=server_seq, 
+                        session.server_ip, client_ip, listen_port, client_port,
+                        seq=session.server_seq, 
                         ack_seq=next_ack, 
                         ack=1,
-                        window=advertised_rwnd  
+                        window=advertised_rwnd
                     )
-                    ip_header = build_ip_header(server_ip, client_ip, socket.IPPROTO_TCP, len(ack_packet))
+                    ip_header = build_ip_header(session.server_ip, client_ip, socket.IPPROTO_TCP, len(ack_packet))
                     s.sendto(ip_header + ack_packet, (client_ip, 0))
                     print(f"[Streap_raw] Sent ACK for data (Ack={next_ack}, Advertised_rwnd={advertised_rwnd})")
                         
