@@ -42,6 +42,7 @@ from .flow_control import (
     update_peer_window,
     get_send_allowance,
     should_send_window_probe,
+    calculate_advertised_window,
 )
 from .reliability_control import (
     init_reliability_control,
@@ -209,7 +210,7 @@ def checksum(msg):
     return ~s & 0xffff
 
 
-def build_tcp_packet(src_ip, dest_ip, src_port, dst_port, seq, ack_seq, syn=0, ack=0, fin=0):
+def build_tcp_packet(src_ip, dest_ip, src_port, dst_port, seq, ack_seq, syn=0, ack=0, fin=0, window=None):
     """Stitches a structurally flawless 20-byte TCP header.
 
     Args:
@@ -225,7 +226,11 @@ def build_tcp_packet(src_ip, dest_ip, src_port, dst_port, seq, ack_seq, syn=0, a
     """
     flags = (ack << 4) + (syn << 1) + fin
     offset_res = (5 << 4) + 0  # 20 bytes data offset (5 * 4)
-    window = 5840
+    # window = 5840
+    if window is None:
+        window = 65535
+    else:
+        window = max(0, min(int(window), 65535))
     urg_ptr = 0
     draft_checksum = 0
 
@@ -805,25 +810,43 @@ def run_conn_recv(s: socket.socket, conn_info: conn_struct) -> bytes:
                     print(f"[Streap_raw] Received payload: {raw_payload[:100]}...")
                     
                     # TODO (Slide 71, 75, 88): Process in-order delivery vs out-of-order buffering/discarding
+                    deliverable_payload = b""
                     with connections_lock:
                         if client_key in connections:
                             session = connections[client_key]
                             session, deliverable_payload, next_ack = handle_incoming_data(session, pkt_seq, raw_payload)
                             connections[client_key] = session._replace(last_activity=time.time())
+                            
+                            # Calculate buffer_
+                            unhandled_bytes = len(deliverable_payload) + sum(len(chunk) for chunk in session.rcv_buffer.values())
+                            last_byte_read = session.client_seq - unhandled_bytes
+                            advertised_rwnd = calculate_advertised_window(session, last_byte_read)
+                            
+                            server_ip = session.server_ip
+                            server_seq = session.server_seq
                         else:
                             deliverable_payload = raw_payload
                             next_ack = pkt_seq + len(raw_payload)
+                            advertised_rwnd = 65535
+                            server_ip = listen_ip
+                            server_seq = 0
 
-                    # Send cumulative ACK
-                    ack_packet = build_tcp_packet(session.server_ip, client_ip, listen_port, client_port,
-                                                  seq=session.server_seq, ack_seq=next_ack, ack=1)
-                    ip_header = build_ip_header(session.server_ip, client_ip, socket.IPPROTO_TCP, len(ack_packet))
+                    # Send cumulative ACK along with window size
+                    ack_packet = build_tcp_packet(
+                        server_ip, client_ip, listen_port, client_port,
+                        seq=server_seq, 
+                        ack_seq=next_ack, 
+                        ack=1,
+                        window=advertised_rwnd  
+                    )
+                    ip_header = build_ip_header(server_ip, client_ip, socket.IPPROTO_TCP, len(ack_packet))
                     s.sendto(ip_header + ack_packet, (client_ip, 0))
-                    print(f"[Streap_raw] Sent ACK for data (Ack={next_ack})")
+                    print(f"[Streap_raw] Sent ACK for data (Ack={next_ack}, Advertised_rwnd={advertised_rwnd})")
                         
                     # Return in-order received payload if available
                     if len(deliverable_payload) > 0:
                         return deliverable_payload
+
 
             # Handle pure ACK (no data)
             elif ack_flag and not syn_flag and not psh_flag and not has_data:
