@@ -42,12 +42,13 @@ from .flow_control import (
     update_peer_window,
     get_send_allowance,
     should_send_window_probe,
+    
 )
 from .reliability_control import (
     init_reliability_control,
     update_rtt_and_timeout,
-    prune_acked_segments,
-    check_timeout,
+    handle_ack,
+    check_and_handle_timeout,
     handle_incoming_data,
 )
 from .congestion_control import (
@@ -73,6 +74,7 @@ conn_struct = namedtuple('conn_struct', [
     'rcv_wnd', # sender's own buffer
     'last_probe_time',
     'probe_interval',
+    'timer',
     'send_base',
     'unacked_queue',
     'rcv_buffer',
@@ -105,7 +107,7 @@ def create_connection_struct(client_ip, client_port, server_ip, server_port, sta
         client_seq=client_seq,
         expected_final_ack=expected_final_ack,
         last_activity=last_activity,
-
+        timer=rc['timer'],
         send_base=rc['send_base'],
         unacked_queue=rc['unacked_queue'],
         timeout_interval=rc['timeout_interval'],
@@ -791,8 +793,8 @@ def run_conn_recv(s: socket.socket, conn_info: conn_struct) -> bytes:
                         session = connections[client_key]
                         # TODO: Update peer window, prune acknowledged segments, and update congestion window
                         session = update_peer_window(session, win_size)
-                        session = prune_acked_segments(session, pkt_ack, time.time())
-                        session = on_ack_received(session, pkt_ack)
+                        session = handle_ack(session, pkt_ack, time.time())
+                      #  session = on_ack_received(session, pkt_ack)
                         connections[client_key] = session
 
             # Handle data payload (PSH + ACK) or (ACK with data) - Fast path ACK
@@ -865,6 +867,9 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
     client_key = (client_ip, client_port)
     listen_ip = conn_info.server_ip
     listen_port = conn_info.server_port
+
+
+    q = get_packet_queue(client_key)
     
     with connections_lock:
         if client_key not in connections:
@@ -875,62 +880,108 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
     try:
         total_len = len(payload)
         offset = 0
+        timer = None
 
         while offset < total_len or len(session.unacked_queue) > 0:
-            now = time.time()
+           
             with connections_lock:
                 if client_key not in connections:
                     return -1
                 session = connections[client_key]
 
-                # TODO: Window allowance calculation: min(cwnd, rwnd) - in_flight
-                flight_size = session.server_seq - session.send_base
-                effective_window = min(session.cwnd, session.rwnd)
-                allowance = max(0, int(effective_window - flight_size))
+            # TODO: Window allowance calculation: min(cwnd, rwnd) - in_flight
+            flight_size = session.server_seq - session.send_base
+            effective_window = min(session.cwnd, session.rwnd)
+            allowance = max(0, int(effective_window - flight_size))
 
-                # TODO: Segment payload into MSS-sized packets while allowance permits
-                while offset < total_len and allowance >= min(session.mss, total_len - offset):
-                    chunk_len = min(session.mss, total_len - offset, allowance)
-                    chunk = payload[offset:offset + chunk_len]
+            # TODO: Segment payload into MSS-sized packets while allowance permits
+            while offset < total_len and allowance >= min(session.mss, total_len - offset):
+                chunk_len = min(session.mss, total_len - offset, allowance)
+                chunk = payload[offset:offset + chunk_len]
 
-                    send_tcp_data_segment(
-                        s, listen_ip, client_ip, listen_port, client_port,
-                        seq=session.server_seq, ack_seq=session.client_seq, payload=chunk
-                    )
+                send_tcp_data_segment(
+                    s, listen_ip, client_ip, listen_port, client_port,
+                    seq=session.server_seq, ack_seq=session.client_seq, payload=chunk
+                )
 
-                    new_queue = list(session.unacked_queue)
-                    new_queue.append({'seq': session.server_seq, 'payload': chunk, 'send_time': now})
+                new_queue = list(session.unacked_queue)
+                new_queue.append({'seq': session.server_seq, 'payload': chunk, 'send_time': time.time(), 'is_retransmitted': False})
 
-                    offset += chunk_len
-                    allowance -= chunk_len
-                    session = session._replace(
-                        server_seq=session.server_seq + chunk_len,
-                        unacked_queue=new_queue,
-                        last_activity=now
-                    )
+                offset += chunk_len
+                allowance -= chunk_len
+                session = session._replace(
+                    server_seq=session.server_seq + chunk_len,
+                    unacked_queue=new_queue,
+                )
 
-                # TODO: Check timeout_interval 
-                session, retrans_pkt = check_timeout(session, now)
-                if retrans_pkt:
-                    send_tcp_data_segment(
-                        s, listen_ip, client_ip, listen_port, client_port,
-                        seq=retrans_pkt['seq'], ack_seq=session.client_seq, payload=retrans_pkt['payload']
-                    )
-                    session = on_timeout_detected(session)
+            # TODO: Check timeout_interval 
+            session, retrans_pkt = check_and_handle_timeout(session, time.time())
+            if retrans_pkt:
+                send_tcp_data_segment(
+                    s, listen_ip, client_ip, listen_port, client_port,
+                    seq=retrans_pkt['seq'], ack_seq=session.client_seq, payload=retrans_pkt['payload']
+                )
+                timer = time.time()  # Reset timer after retransmission
+                new_queue = list(session.unacked_queue)
+                # Update retransmission flag for the retransmitted packet
+                for pkt in new_queue:
+                    if pkt['seq'] == retrans_pkt['seq']:
+                        pkt['is_retransmitted'] = True
+                session = session._replace(unacked_queue=new_queue)
 
-                # TODO: Probing
-                # If peer advertises rwnd == 0 and there is still pending data to send (offset < total_len):
-                # When should_send_window_probe(session, now) is True:
-                #   Send 1 byte of new data with seq = session.server_seq, payload = payload[offset:offset+1]
-                if offset < total_len and should_send_window_probe(session, now):
-                    probe_chunk = payload[offset:offset + 1]
-                    send_tcp_data_segment(
-                        s, listen_ip, client_ip, listen_port, client_port,
-                        seq=session.server_seq, ack_seq=session.client_seq, payload=probe_chunk
-                    )
-                    session = session._replace(last_probe_time=now)
 
-                connections[client_key] = session
+               #  session = on_timeout_detected(session)
+
+            # event: ack received:
+            if q.qsize() > 0:
+                try:
+                    packet, addr = q.get_nowait()
+                except queue.Empty:
+                    packet = None
+
+                if packet:
+                    # Extract IP Header Length
+                    ihl = (packet[0] & 0x0F) * 4
+                    tcp_packet = packet[ihl:]
+                    
+                    if len(tcp_packet) >= 20:
+                        # Unpack the received TCP header
+                        tcph = struct.unpack('!HHLLBBHHH', tcp_packet[:20])
+                        src_port, dest_port, pkt_seq, pkt_ack, flags, win_size = (
+                            tcph[0],
+                            tcph[1],
+                            tcph[2],
+                            tcph[3],
+                            tcph[5],
+                            tcph[6],
+                        )
+
+                        ack_flag = (flags & 0x10) >> 4
+
+                        if ack_flag and dest_port == listen_port and src_port == client_port:
+                            with connections_lock:
+                                if client_key in connections:
+                                    session = connections[client_key]
+                                    session = update_peer_window(session, win_size)
+                                    session = handle_ack(session, pkt_ack, time.time())
+                                    # session = on_ack_received(session, pkt_ack)
+                                    connections[client_key] = session
+            
+
+
+            # TODO: Probing
+            # If peer advertises rwnd == 0 and there is still pending data to send (offset < total_len):
+            # When should_send_window_probe(session, now) is True:
+            #   Send 1 byte of new data with seq = session.server_seq, payload = payload[offset:offset+1]
+            if offset < total_len and should_send_window_probe(session, time.time()):
+                probe_chunk = payload[offset:offset + 1]
+                send_tcp_data_segment(
+                    s, listen_ip, client_ip, listen_port, client_port,
+                    seq=session.server_seq, ack_seq=session.client_seq, payload=probe_chunk
+                )
+                session = session._replace(last_probe_time=time.time())
+
+            connections[client_key] = session
 
             time.sleep(0.005)
 
