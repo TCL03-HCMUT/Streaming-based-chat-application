@@ -35,9 +35,13 @@ def update_rtt_and_timeout(session :namedtuple, sample_rtt: float): # -> sender
     return session._replace(estimated_rtt=ertt, deviation_rtt=drtt, timeout_interval=to)
 
 def handle_ack(session, ack_seq: int, current_time: float): # -> sender
-   if ack_seq < session.send_base:
-       return session
+   if ack_seq == session.send_base:
+       return session, True
    
+   if ack_seq < session.send_base:
+       return session, False
+
+   session = session._replace(send_base=ack_seq)
    q = session.unacked_queue
    last = None
 
@@ -48,22 +52,24 @@ def handle_ack(session, ack_seq: int, current_time: float): # -> sender
        sample_rtt = current_time - last['send_time']
        session = update_rtt_and_timeout(session, sample_rtt)
 
-   session = session._replace(send_base=ack_seq, unacked_queue=q)
-   return session
+   if len(q) > 0:
+       q[0]['send_time'] = time.time()
+
+   return session, False
 
 def check_and_handle_timeout(session, current_time: float): # -> sender
 
-    if not session.unacked_queue:
+    if len(session.unacked_queue) == 0:
         return session, None
 
     oldest = session.unacked_queue[0]
-    if current_time - session.unacked_queue[0]['send_time'] <= session.timeout_interval:
+    if current_time - oldest['send_time'] <= session.timeout_interval:
         return session, None
 
-    oldest['send_time'] = time.time() # reset timer
     oldest['is_retransmitted'] = True
-    session = session._replace(timeout_interval=session.timeout_interval * 2)
-    return session, session.unacked_queue[0]
+    oldest['send_time'] = current_time
+
+    return session, oldest
 
 
 
