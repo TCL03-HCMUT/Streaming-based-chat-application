@@ -74,7 +74,6 @@ conn_struct = namedtuple('conn_struct', [
     'rcv_wnd', # sender's own buffer
     'last_probe_time',
     'probe_interval',
-    'timer',
     'send_base',
     'unacked_queue',
     'rcv_buffer',
@@ -107,7 +106,6 @@ def create_connection_struct(client_ip, client_port, server_ip, server_port, sta
         client_seq=client_seq,
         expected_final_ack=expected_final_ack,
         last_activity=last_activity,
-        timer=rc['timer'],
         send_base=rc['send_base'],
         unacked_queue=rc['unacked_queue'],
         timeout_interval=rc['timeout_interval'],
@@ -983,8 +981,6 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
                         else:
                             session = session._replace(dup_acks=0)  # Reset dup ack count
 
-                        if len(session.unacked_queue) > 0:
-                            timer = time.time()
                         #  session = on_ack_received(session, pkt_ack)
                         connections[client_key] = session
 

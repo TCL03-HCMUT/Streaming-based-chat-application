@@ -8,7 +8,6 @@ BETA = 0.25
 
 def init_reliability_control(initial_seq: int):
     return {
-        'timer': None,
         'send_base': initial_seq,
         'unacked_queue': [],  # list of dicts: [{'seq': int, 'payload': bytes, 'send_time': float, 'is_retransmitted': bool}]
         'timeout_interval': DEFAULT_TIMEOUT, 
