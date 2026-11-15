@@ -18,7 +18,7 @@ def init_reliability_control(initial_seq: int):
     }
 
 
-def update_rtt_and_timeout(session :namedtuple, sample_rtt: float): # -> sender
+def update_rtt_and_timeout(session, sample_rtt: float): # -> sender
     ertt = session.estimated_rtt
     drtt = session.deviation_rtt
 
@@ -34,27 +34,29 @@ def update_rtt_and_timeout(session :namedtuple, sample_rtt: float): # -> sender
     return session._replace(estimated_rtt=ertt, deviation_rtt=drtt, timeout_interval=to)
 
 def handle_ack(session, ack_seq: int, current_time: float): # -> sender
-   if ack_seq == session.send_base:
-       return session, True
-   
-   if ack_seq < session.send_base:
-       return session, False
+    if ack_seq == session.send_base:
+        return session, True
+    
+    if ack_seq < session.send_base:
+        return session, False
 
-   session = session._replace(send_base=ack_seq)
-   q = session.unacked_queue
-   last = None
+    session = session._replace(send_base=ack_seq)
+    q = session.unacked_queue
+    last = None
+    sample_rtt = None
 
-   while q and q[0]['seq'] + len(q[0]['payload']) <= ack_seq:
-       last = q.pop(0)
+    while q and q[0]['seq'] + len(q[0]['payload']) <= ack_seq:
+        last = q.pop(0)
 
-   if last is not None and last['is_retransmitted'] is False:
-       sample_rtt = current_time - last['send_time']
-       session = update_rtt_and_timeout(session, sample_rtt)
+        if last is not None and last['is_retransmitted'] is False:
+            sample_rtt = current_time - last['send_time']
+    if sample_rtt is not None:
+        session = update_rtt_and_timeout(session, sample_rtt)
 
-   if len(q) > 0:
-       q[0]['send_time'] = time.time()
+    if len(q) > 0:
+        q[0]['send_time'] = time.time()
 
-   return session, False
+    return session, False
 
 def check_and_handle_timeout(session, current_time: float): # -> sender
 
