@@ -1,5 +1,8 @@
-from collections import namedtuple
 import time
+
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .streaprous_raw_connection import conn_struct
 
 DEFAULT_TIMEOUT = 1.0
 ALPHA = 0.125
@@ -13,6 +16,8 @@ def init_reliability_control(initial_seq: int):
         'timeout_interval': DEFAULT_TIMEOUT, 
         'estimated_rtt': None,
         'deviation_rtt': None,
+        'timer_active': False,
+        'timer_start_time': 0.0,
 
         'rcv_buffer': {},     # dict: {seq_num: payload_bytes} for out-of-order segments
     }
@@ -33,9 +38,23 @@ def update_rtt_and_timeout(session, sample_rtt: float): # -> sender
 
     return session._replace(estimated_rtt=ertt, deviation_rtt=drtt, timeout_interval=to)
 
-def handle_ack(session, ack_seq: int, current_time: float): # -> sender
+def handle_ack(
+    session: conn_struct,
+    ack_seq: int,
+    current_time: float,
+    has_data: bool = False,
+    fin_flag: bool = False,
+    win_size: int | None = None,
+): # -> sender
     if ack_seq == session.send_base:
-        return session, True
+        win_unchanged = (win_size is None) or (max(0, int(win_size)) == session.rwnd)
+        is_dup_ack = (
+            len(session.unacked_queue) > 0
+            and not has_data
+            and not fin_flag
+            and win_unchanged
+        )
+        return session, is_dup_ack
     
     if ack_seq < session.send_base:
         return session, False
@@ -53,23 +72,27 @@ def handle_ack(session, ack_seq: int, current_time: float): # -> sender
     if sample_rtt is not None:
         session = update_rtt_and_timeout(session, sample_rtt)
 
-    if len(q) > 0:
-        q[0]['send_time'] = time.time()
+    if len(q) == 0:
+        session = session._replace(timer_active=False)
+    else:
+        session = session._replace(timer_active=True, timer_start_time=current_time)
 
     return session, False
 
-def check_and_handle_timeout(session, current_time: float): # -> sender
-
-    if len(session.unacked_queue) == 0:
+def check_and_handle_timeout(session: conn_struct, current_time: float): # -> sender
+    if not session.timer_active or len(session.unacked_queue) == 0:
         return session, None
 
+    if current_time - session.timer_start_time < session.timeout_interval:
+        return session, None
+    
     oldest = session.unacked_queue[0]
-    if current_time - oldest['send_time'] <= session.timeout_interval:
-        return session, None
-
     oldest['is_retransmitted'] = True
-    oldest['send_time'] = current_time
 
+    session = session._replace(
+        timer_active=True,
+        timer_start_time=current_time,
+    )
     return session, oldest
 
 

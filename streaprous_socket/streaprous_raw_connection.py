@@ -53,7 +53,7 @@ from .reliability_control import (
 )
 from .congestion_control import (
     init_congestion_control,
-    on_ack_received,
+    update_congestion,
     on_timeout_detected,
 )
 
@@ -84,7 +84,10 @@ conn_struct = namedtuple('conn_struct', [
     'ssthresh',
     'dup_acks',
     'last_ack_seq',
-    'mss'
+    'mss',
+    'congestion_state',
+    'timer_active',
+    'timer_start_time'
 ])
 
 
@@ -111,6 +114,8 @@ def create_connection_struct(client_ip, client_port, server_ip, server_port, sta
         timeout_interval=rc['timeout_interval'],
         estimated_rtt=rc['estimated_rtt'],
         deviation_rtt=rc['deviation_rtt'],
+        timer_active=rc['timer_active'],
+        timer_start_time=rc['timer_start_time'],
         rcv_buffer=rc['rcv_buffer'],
 
         rwnd=fc['rwnd'],
@@ -122,7 +127,8 @@ def create_connection_struct(client_ip, client_port, server_ip, server_port, sta
         ssthresh=cc['ssthresh'],
         dup_acks=cc['dup_acks'],
         last_ack_seq=cc['last_ack_seq'],
-        mss=cc['mss']
+        mss=cc['mss'],
+        congestion_state=cc['congestion_state']
     )
 
 
@@ -784,20 +790,29 @@ def run_conn_recv(s: socket.socket, conn_info: conn_struct) -> bytes:
                 if client_key in connections:
                     connections[client_key] = session._replace(last_activity=time.time())
 
+            # Handle data payload (PSH + ACK) or (ACK with data) - Fast path ACK
+            # Some clients may not set PSH flag for small requests
+            has_data = len(tcp_packet) > ((tcp_packet[12] >> 4) & 0x0F) * 4
+
             # Process ACK for Flow, Reliability, and Congestion Control
-            if ack_flag and not syn_flag:
+            if ack_flag and not syn_flag and not rst_flag:
                 with connections_lock:
                     if client_key in connections:
                         session = connections[client_key]
                         # TODO: Update peer window, prune acknowledged segments, and update congestion window
+                        session, is_dup_ack = handle_ack(
+                            session, pkt_ack, time.time(),
+                            has_data=has_data, fin_flag=bool(fin_flag), win_size=win_size
+                        )
                         session = update_peer_window(session, win_size)
-                        session, _  = handle_ack(session, pkt_ack, time.time())
-                      #  session = on_ack_received(session, pkt_ack)
+                        session, should_retransmit = update_congestion(session, pkt_ack, is_dup_ack=is_dup_ack)
                         connections[client_key] = session
-
-            # Handle data payload (PSH + ACK) or (ACK with data) - Fast path ACK
-            # Some clients may not set PSH flag for small requests
-            has_data = len(tcp_packet) > ((tcp_packet[12] >> 4) & 0x0F) * 4
+                        
+                        if should_retransmit and len(session.unacked_queue) > 0:
+                            retrans_pkt = session.unacked_queue[0]
+                            send_tcp_data_segment(s, listen_ip, client_ip, listen_port, client_port, 
+                            seq = retrans_pkt['seq'], ack_seq=session.client_seq, payload=retrans_pkt['payload'])
+                            retrans_pkt['is_retransmitted'] = True
             
             if (psh_flag and ack_flag) or (ack_flag and has_data and not syn_flag and not fin_flag and not rst_flag):
                 # Dynamically look up header length to bypass any incoming TCP Options
@@ -832,12 +847,13 @@ def run_conn_recv(s: socket.socket, conn_info: conn_struct) -> bytes:
             # Handle pure ACK (no data)
             elif ack_flag and not syn_flag and not psh_flag and not has_data:
                 print(f"[Streap_raw] Received ACK from {client_ip}:{client_port} (Ack={pkt_ack})")
-                with connections_lock:
-                    if client_key in connections:
-                        connections[client_key] = session._replace(
-                            server_seq=pkt_ack,
-                            last_activity=time.time()
-                        )
+                # This rewinds server_seq to the previous state
+                # with connections_lock:
+                #     if client_key in connections:
+                #         connections[client_key] = session._replace(
+                #             server_seq=pkt_ack,
+                #             last_activity=time.time()
+                #         )
 
     except KeyboardInterrupt:
         print("\n[Streap_raw] Receive loop interrupted.")
@@ -912,32 +928,34 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
                     seq=session.server_seq, ack_seq=session.client_seq, payload=chunk
                 )
 
-                new_queue = list(session.unacked_queue)
-                new_queue.append({'seq': session.server_seq, 'payload': chunk, 'send_time': time.time(), 'is_retransmitted': False})
-
+                now = time.time()
                 offset += chunk_len
                 allowance -= chunk_len
                 with connections_lock:
                     session = connections[client_key]
+                    new_queue = list(session.unacked_queue)
+                    new_queue.append({'seq': session.server_seq, 'payload': chunk, 'send_time': now, 'is_retransmitted': False})
                     session = session._replace(
                         server_seq=session.server_seq + chunk_len,
                         unacked_queue=new_queue,
+                        timer_active=True,
+                        timer_start_time=session.timer_start_time if session.timer_active else now,
                     )
                     connections[client_key] = session
 
             # TODO: Check timeout_interval
             retrans_pkt = None
             with connections_lock:
+                session = connections[client_key]
                 session, retrans_pkt = check_and_handle_timeout(session, time.time())
+                if retrans_pkt:
+                    session = on_timeout_detected(session)
+                    connections[client_key] = session
             if retrans_pkt:
                 send_tcp_data_segment(
                     s, listen_ip, client_ip, listen_port, client_port,
                     seq=retrans_pkt['seq'], ack_seq=session.client_seq, payload=retrans_pkt['payload']
                 )
-            with connections_lock:  
-                connections[client_key] = session
-                    
-               #  session = on_timeout_detected(session)
 
             # event: ack received:
             try:
@@ -961,33 +979,33 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
                     tcph[6],
                 )
 
+                syn_flag = (flags & 0x02) >> 1
                 ack_flag = (flags & 0x10) >> 4
+                fin_flag = (flags & 0x01)
+                rst_flag = (flags & 0x04) >> 2
+                tcp_header_len = ((tcp_packet[12] >> 4) & 0x0F) * 4
+                has_data = len(tcp_packet) > tcp_header_len
 
                 retrans_pkt = None
-                if ack_flag and dest_port == listen_port and src_port == client_port:
+                if ack_flag and not syn_flag and not rst_flag and dest_port == listen_port and src_port == client_port:
                     with connections_lock:
                         session = connections.get(client_key)
                         if session is None:
                             return -1
+                        session, is_dup_ack = handle_ack(
+                            session, pkt_ack, time.time(),
+                            has_data=has_data, fin_flag=bool(fin_flag), win_size=win_size
+                        )
                         session = update_peer_window(session, win_size)
-                        session, is_dup_ack = handle_ack(session, pkt_ack, time.time())
-                        if is_dup_ack:
-                            dup_count = session.dup_acks + 1
-                            if dup_count >= 3:
-                                pkt = session.unacked_queue[0] 
-                                retrans_pkt = pkt
-                                dup_count = 0 
-                            session = session._replace(dup_acks=dup_count)
-                        else:
-                            session = session._replace(dup_acks=0)  # Reset dup ack count
-
-                        #  session = on_ack_received(session, pkt_ack)
+                        session, should_retransmit = update_congestion(session, pkt_ack, is_dup_ack=is_dup_ack)
+                        if should_retransmit and len(session.unacked_queue) > 0:
+                            retrans_pkt = session.unacked_queue[0]
+                            retrans_pkt['is_retransmitted'] = True
                         connections[client_key] = session
 
                 if retrans_pkt:
-                    send_tcp_data_segment( s, listen_ip, client_ip, listen_port, client_port, 
-                    seq = retrans_pkt['seq'], ack_seq=session.client_seq, payload=retrans_pkt['payload'])
-                    retrans_pkt['is_retransmitted'] = True
+                    send_tcp_data_segment(s, listen_ip, client_ip, listen_port, client_port,
+                    seq=retrans_pkt['seq'], ack_seq=session.client_seq, payload=retrans_pkt['payload'])
 
 
             time.sleep(0.005)
