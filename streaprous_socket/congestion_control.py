@@ -1,4 +1,3 @@
-"""Congestion Control Module (TCP Reno: Slow Start, Congestion Avoidance, Fast Retransmit)."""
 from enum import Enum
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:

@@ -799,7 +799,7 @@ def run_conn_recv(s: socket.socket, conn_info: conn_struct) -> bytes:
                 with connections_lock:
                     if client_key in connections:
                         session = connections[client_key]
-                        # TODO: Update peer window, prune acknowledged segments, and update congestion window
+                        # flow, reliability and congestion control handling
                         session, is_dup_ack = handle_ack(
                             session, pkt_ack, time.time(),
                             has_data=has_data, fin_flag=bool(fin_flag), win_size=win_size
@@ -823,7 +823,7 @@ def run_conn_recv(s: socket.socket, conn_info: conn_struct) -> bytes:
                     print(f"[Streap_raw] Received {len(raw_payload)} bytes of data from {client_ip}:{client_port}")
                     print(f"[Streap_raw] Received payload: {raw_payload[:100]}...")
                     
-                    # TODO (Slide 71, 75, 88): Process in-order delivery vs out-of-order buffering/discarding
+                    # Process in-order delivery vs out-of-order buffering/discarding
                     with connections_lock:
                         if client_key in connections:
                             session = connections[client_key]
@@ -866,7 +866,6 @@ def run_conn_recv(s: socket.socket, conn_info: conn_struct) -> bytes:
 def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> int:
     """
     Send data on an established connection using raw sockets.
-    Respects Flow Control (rwnd), Congestion Control (cwnd), and Reliability (ARQ).
     
     Args:
         s: Raw socket
@@ -896,8 +895,7 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
         offset = 0
 
         while offset < total_len or len(session.unacked_queue) > 0:
-
-             # TODO: Probing
+            # Probing
             # If peer advertises rwnd == 0 and there is still pending data to send (offset < total_len):
             # When should_send_window_probe(session, now) is True:
             #   Send 1 byte of new data with seq = session.server_seq, payload = payload[offset:offset+1]
@@ -907,19 +905,29 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
                     s, listen_ip, client_ip, listen_port, client_port,
                     seq=session.server_seq, ack_seq=session.client_seq, payload=probe_chunk
                 )
+                now = time.time()
+                offset += 1
                 with connections_lock:
                     session = connections[client_key]
-                    session = session._replace(last_probe_time=time.time())
+                    new_queue = list(session.unacked_queue)
+                    new_queue.append({'seq': session.server_seq, 'payload': probe_chunk, 'send_time': now, 'is_retransmitted': False})
+                    session = session._replace(
+                        server_seq=session.server_seq + 1,
+                        unacked_queue=new_queue,
+                        timer_active=True,
+                        timer_start_time=session.timer_start_time if session.timer_active else now,
+                        last_probe_time=now
+                    )
                     connections[client_key] = session
 
 
-            # TODO: Window allowance calculation: min(cwnd, rwnd) - in_flight
+            # Window allowance calculation: min(cwnd, rwnd) - in_flight
             flight_size = session.server_seq - session.send_base
             effective_window = min(session.cwnd, session.rwnd)
             allowance = max(0, int(effective_window - flight_size))
 
-            # TODO: Segment payload into MSS-sized packets while allowance permits
-            while offset < total_len and allowance >= min(session.mss, total_len - offset):
+            # Segment payload into MSS-sized packets while allowance permits
+            while offset < total_len and allowance > 0:
                 chunk_len = min(session.mss, total_len - offset, allowance)
                 chunk = payload[offset:offset + chunk_len]
 
@@ -943,7 +951,7 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
                     )
                     connections[client_key] = session
 
-            # TODO: Check timeout_interval
+            # Check timeout_interval
             retrans_pkt = None
             with connections_lock:
                 session = connections[client_key]
@@ -959,7 +967,7 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
 
             # event: ack received:
             try:
-                packet, addr = q.get_nowait()
+                packet, addr = q.get(timeout=0.05)
             except queue.Empty:
                 continue
 

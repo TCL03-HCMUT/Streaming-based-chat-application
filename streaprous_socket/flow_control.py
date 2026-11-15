@@ -1,4 +1,3 @@
-"""Flow Control Module (Advertised Receive Window Management)."""
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .streaprous_raw_connection import conn_struct
