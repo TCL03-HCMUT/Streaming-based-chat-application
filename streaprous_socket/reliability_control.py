@@ -1,8 +1,8 @@
 import time
 
-from typing import TYPE_CHECKING
-if TYPE_CHECKING:
-    from .streaprous_raw_connection import conn_struct
+# from typing import TYPE_CHECKING
+# if TYPE_CHECKING:
+#     from .streaprous_raw_connection import conn_struct
 
 DEFAULT_TIMEOUT = 1.0
 ALPHA = 0.125
@@ -39,7 +39,7 @@ def update_rtt_and_timeout(session, sample_rtt: float): # -> sender
     return session._replace(estimated_rtt=ertt, deviation_rtt=drtt, timeout_interval=to)
 
 def handle_ack(
-    session: conn_struct,
+    session,
     ack_seq: int,
     current_time: float,
     has_data: bool,
@@ -79,7 +79,7 @@ def handle_ack(
 
     return session, False
 
-def check_and_handle_timeout(session: conn_struct, current_time: float): # -> sender
+def check_and_handle_timeout(session, current_time: float): # -> sender
     if not session.timer_active or len(session.unacked_queue) == 0:
         return session, None
 

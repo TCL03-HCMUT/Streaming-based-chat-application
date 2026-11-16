@@ -35,6 +35,18 @@ _packet_dispatcher_lock = threading.Lock()
 _current_listen_port = None
 _current_raw_socket = None
 
+_registered_ports = set()
+
+def register_port(port: int):
+    """Register an ephemeral client port so its SYN-ACK and incoming data are not dropped."""
+    with _packet_dispatcher_lock:
+        _registered_ports.add(port)
+
+def unregister_port(port: int):
+    """Unregister the port when the raw connection closes."""
+    with _packet_dispatcher_lock:
+        _registered_ports.discard(port)
+
 
 _SYN_KEY = ("SYN", None)
 
@@ -57,7 +69,10 @@ def _packet_dispatcher(s, listen_port):
             src_port, dest_port = struct.unpack('!HH', tcp[:4])
 
             # Verify the received packet matching the listen port
-            if dest_port != listen_port:   
+            with _packet_dispatcher_lock:
+                port_match = (dest_port == listen_port) or (dest_port in _registered_ports)
+
+            if not port_match:
                 continue
             flags = tcp[13]
             is_syn = (flags & 0x02) and not (flags & 0x10)

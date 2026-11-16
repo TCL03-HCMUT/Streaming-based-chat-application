@@ -27,6 +27,7 @@ import time
 import queue
 from collections import namedtuple
 import netifaces
+import random
 
 # Import streaprout packet dispatcher functions
 from .streaprous_packet_dispatcher import (
@@ -90,6 +91,113 @@ conn_struct = namedtuple('conn_struct', [
     'timer_start_time'
 ])
 
+CLIENT_PORT_MIN = 40000
+CLIENT_PORT_MAX = 40999
+_client_port_counter = CLIENT_PORT_MIN
+_client_port_lock = threading.Lock()
+
+def allocate_client_port():
+    global _client_port_counter
+    with _client_port_lock:
+        p = _client_port_counter
+        _client_port_counter += 1
+        if _client_port_counter > CLIENT_PORT_MAX:
+            _client_port_counter = CLIENT_PORT_MIN
+        return p
+
+def connect(s: socket.socket, local_ip: str, remote_ip: str, remote_port: int, timeout=5.0) -> conn_struct:
+    """
+    Perform client-side raw TCP 3-way handshake:
+    1. Send SYN
+    2. Wait for SYN-ACK
+    3. Send ACK -> Return established conn_struct
+    """
+    local_port = allocate_client_port()
+    
+    # Allow dispatcher to accept packets for our local client port
+    from .streaprous_packet_dispatcher import register_port, unregister_port
+    register_port(local_port)
+    
+    client_key = (remote_ip, remote_port)
+    q = get_packet_queue(client_key)
+    
+    isn = random.randint(100000, 2000000)
+    server_seq = isn
+    
+    with connections_lock:
+        connections[client_key] = create_connection_struct(
+            client_ip=remote_ip,
+            client_port=remote_port,
+            server_ip=local_ip,
+            server_port=local_port,
+            state="SYN_SENT",
+            server_seq=server_seq,
+            client_seq=0,
+            expected_final_ack=isn + 1
+        )
+    
+    # 1. Send SYN
+    syn_tcp = build_tcp_packet(local_ip, remote_ip, local_port, remote_port, seq=isn, ack_seq=0, syn=1)
+    syn_ip = build_ip_header(local_ip, remote_ip, socket.IPPROTO_TCP, len(syn_tcp))
+    s.sendto(syn_ip + syn_tcp, (remote_ip, 0))
+    print(f"[Streap_raw] connect: Sent SYN to {remote_ip}:{remote_port} from port {local_port} (Seq={isn})")
+    
+    # 2. Wait for SYN-ACK
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            packet, addr = q.get(timeout=0.5)
+        except queue.Empty:
+            continue
+            
+        ihl = (packet[0] & 0x0F) * 4
+        tcp = packet[ihl:]
+        if len(tcp) < 20:
+            continue
+        
+        tcph = struct.unpack('!HHLLBBHHH', tcp[:20])
+        src_port, dest_port, pkt_seq, pkt_ack, flags, win_size = (
+            tcph[0], tcph[1], tcph[2], tcph[3], tcph[5], tcph[6]
+        )
+        
+        if dest_port != local_port or src_port != remote_port:
+            continue
+            
+        syn_flag = (flags & 0x02) >> 1
+        ack_flag = (flags & 0x10) >> 4
+        rst_flag = (flags & 0x04) >> 2
+        
+        if rst_flag:
+            unregister_port(local_port)
+            remove_packet_queue(client_key)
+            raise ConnectionRefusedError(f"Connection refused by {remote_ip}:{remote_port}")
+            
+        if syn_flag == 1 and ack_flag == 1 and pkt_ack == isn + 1:
+            print(f"[Streap_raw] connect: Received SYN-ACK from {remote_ip}:{remote_port} (Seq={pkt_seq}, Ack={pkt_ack})")
+            
+            # 3. Send final ACK
+            next_ack = pkt_seq + 1
+            ack_tcp = build_tcp_packet(local_ip, remote_ip, local_port, remote_port, seq=isn + 1, ack_seq=next_ack, ack=1)
+            ack_ip = build_ip_header(local_ip, remote_ip, socket.IPPROTO_TCP, len(ack_tcp))
+            s.sendto(ack_ip + ack_tcp, (remote_ip, 0))
+            print(f"[Streap_raw] connect: Sent final ACK (Seq={isn+1}, Ack={next_ack}). Connection ESTABLISHED.")
+            
+            with connections_lock:
+                session = connections[client_key]._replace(
+                    state="ESTABLISHED",
+                    server_seq=isn + 1,
+                    client_seq=next_ack,
+                    snd_una=isn + 1,
+                    last_ack_seq=isn + 1,
+                    rwnd=win_size or 65535,
+                    last_activity=time.time()
+                )
+                connections[client_key] = session
+            return session
+
+    unregister_port(local_port)
+    remove_packet_queue(client_key)
+    raise TimeoutError(f"Handshake timeout connecting to {remote_ip}:{remote_port}")
 
 def create_connection_struct(client_ip, client_port, server_ip, server_port, state,
                              server_seq, client_seq, expected_final_ack, last_activity=None):

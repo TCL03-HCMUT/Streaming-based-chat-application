@@ -35,6 +35,10 @@ from streaprous_socket.streaprous_raw_connection import (
     close_connection
 )
 
+from streaprous_socket.streaprous_client import (
+    recv_full_http
+)
+
 class HttpAdapter:
     """
     A mutable :class:`HTTP adapter <HTTP adapter>` for managing client connections
@@ -165,7 +169,7 @@ class HttpAdapter:
         print("[HttpAdapter] Invoke handle_client_raw for {}:{}".format(conn_info.client_ip, conn_info.client_port))
 
         # Receive data using streaprous raw connection
-        data = run_conn_recv(raw_socket, conn_info)
+        data = recv_full_http(raw_socket, conn_info, timeout=5.0)
         
         if not data:
             print("[HttpAdapter] No data received or connection closed")
