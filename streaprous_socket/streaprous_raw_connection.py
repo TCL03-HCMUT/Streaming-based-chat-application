@@ -802,10 +802,10 @@ def run_conn_recv(s: socket.socket, conn_info: conn_struct) -> bytes:
                         # flow, reliability and congestion control handling
                         session, is_dup_ack = handle_ack(
                             session, pkt_ack, time.time(),
-                            has_data=has_data, fin_flag=bool(fin_flag), win_size=win_size
+                            has_data, bool(fin_flag), win_size
                         )
                         session = update_peer_window(session, win_size)
-                        session, should_retransmit = update_congestion(session, pkt_ack, is_dup_ack=is_dup_ack)
+                        session, should_retransmit = update_congestion(session, pkt_ack, is_dup_ack)
                         connections[client_key] = session
                         
                         if should_retransmit and len(session.unacked_queue) > 0:
@@ -922,9 +922,7 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
 
 
             # Window allowance calculation: min(cwnd, rwnd) - in_flight
-            flight_size = session.server_seq - session.send_base
-            effective_window = min(session.cwnd, session.rwnd)
-            allowance = max(0, int(effective_window - flight_size))
+            allowance = get_send_allowance(session)
 
             # Segment payload into MSS-sized packets while allowance permits
             while offset < total_len and allowance > 0:
@@ -967,7 +965,7 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
 
             # event: ack received:
             try:
-                packet, addr = q.get(timeout=0.05)
+                packet, addr = q.get(timeout=0.005)
             except queue.Empty:
                 continue
 
@@ -1002,10 +1000,10 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
                             return -1
                         session, is_dup_ack = handle_ack(
                             session, pkt_ack, time.time(),
-                            has_data=has_data, fin_flag=bool(fin_flag), win_size=win_size
+                            has_data, bool(fin_flag), win_size
                         )
                         session = update_peer_window(session, win_size)
-                        session, should_retransmit = update_congestion(session, pkt_ack, is_dup_ack=is_dup_ack)
+                        session, should_retransmit = update_congestion(session, pkt_ack, is_dup_ack)
                         if should_retransmit and len(session.unacked_queue) > 0:
                             retrans_pkt = session.unacked_queue[0]
                             retrans_pkt['is_retransmitted'] = True

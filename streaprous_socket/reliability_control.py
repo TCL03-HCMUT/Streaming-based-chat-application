@@ -42,12 +42,12 @@ def handle_ack(
     session: conn_struct,
     ack_seq: int,
     current_time: float,
-    has_data: bool = False,
-    fin_flag: bool = False,
-    win_size: int | None = None,
+    has_data: bool,
+    fin_flag: bool,
+    win_size: int,
 ): # -> sender
     if ack_seq == session.send_base:
-        win_unchanged = (win_size is None) or (max(0, int(win_size)) == session.rwnd)
+        win_unchanged = (max(0, int(win_size)) == session.rwnd)
         is_dup_ack = (
             len(session.unacked_queue) > 0
             and not has_data
