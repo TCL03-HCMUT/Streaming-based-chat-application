@@ -1,4 +1,6 @@
-"""Flow Control Module (Advertised Receive Window Management)."""
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .streaprous_raw_connection import conn_struct
 
 DEFAULT_RCV_WND = 65535
 DEFAULT_PROBE_INTERVAL = 5.0
@@ -12,24 +14,22 @@ def init_flow_control():
         'probe_interval': DEFAULT_PROBE_INTERVAL
     }
 
-
-def update_peer_window(session, win_size: int):
-    # TODO: Update peer's advertised receive window (rwnd) from incoming TCP header
-    pass
-
+def update_peer_window(session: conn_struct, win_size: int):
+    return session._replace(rwnd=max(0, int(win_size)))
 
 def get_send_allowance(session) -> int:
-    # TODO: Calculate allowable bytes to transmit based on flow control window
-    # flight_size = session.server_seq - session.snd_una
-    # allowance = max(0, session.rwnd - flight_size)
-    pass
+    flight_size = session.server_seq - session.send_base
+    effective_window = min(session.cwnd, session.rwnd)
+    allowance = max(0, int(effective_window - flight_size))
+    return allowance
 
+def should_send_window_probe(session: conn_struct, current_time: float) -> bool:
+    if session.rwnd == 0 and (current_time - session.last_probe_time) >= session.probe_interval:
+        return True
+    return False
 
-def should_send_window_probe(session, current_time: float) -> bool:
-    # TODO: Probing
-    # When peer advertises rwnd == 0, sender must periodically probe to avoid deadlock.
-    # Check if:
-    #   1. session.rwnd == 0
-    #   2. (current_time - session.last_probe_time) >= session.probe_interval
-    pass
-
+def calculate_advertised_window(session: conn_struct, last_byte_read: int) -> int:
+    last_byte_rcvd = session.client_seq
+    buffer_used = max(0, last_byte_rcvd - last_byte_read)
+    free_space = max(0, session.rcv_wnd - buffer_used)
+    return min(free_space, 65535)
