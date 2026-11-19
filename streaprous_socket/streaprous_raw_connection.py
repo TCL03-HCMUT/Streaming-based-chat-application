@@ -514,6 +514,11 @@ def accept(s: socket.socket, listen_ip: str, listen_port: int, interface_name: s
             if len(tcp_packet) < 20:
                 continue
 
+            # Verify checksum to prevent bit errors
+            pseudo = struct.pack('!4s4sBBH', packet[12:16], packet[16:20], 0, socket.IPPROTO_TCP, len(tcp_packet))
+            if not verify_checksum(pseudo + tcp_packet):
+                continue
+
             # Unpack the received TCP header
             tcph = struct.unpack('!HHLLBBHHH', tcp_packet[:20])
             src_port, dest_port, pkt_seq, pkt_ack, flags, win_size = (
@@ -615,6 +620,11 @@ def accept(s: socket.socket, listen_ip: str, listen_port: int, interface_name: s
                     tcp_packet = packet[ihl:]
                     
                     if len(tcp_packet) < 20:
+                        continue
+
+                    # Verify checksum to prevent bit errors
+                    pseudo = struct.pack('!4s4sBBH', packet[12:16], packet[16:20], 0, socket.IPPROTO_TCP, len(tcp_packet))
+                    if not verify_checksum(pseudo + tcp_packet):
                         continue
 
                     # Unpack the received TCP header
@@ -747,6 +757,11 @@ def run_conn_recv(s: socket.socket, conn_info: conn_struct) -> bytes:
             tcp_packet = packet[ihl:]
             
             if len(tcp_packet) < 20:
+                continue
+
+            # Verify checksum to prevent bit errors
+            pseudo = struct.pack('!4s4sBBH', packet[12:16], packet[16:20], 0, socket.IPPROTO_TCP, len(tcp_packet))
+            if not verify_checksum(pseudo + tcp_packet):
                 continue
 
             # Unpack the received TCP header
@@ -1006,6 +1021,11 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
             tcp_packet = packet[ihl:]
             
             if len(tcp_packet) >= 20:
+                # Verify checksum to prevent bit errors
+                pseudo = struct.pack('!4s4sBBH', packet[12:16], packet[16:20], 0, socket.IPPROTO_TCP, len(tcp_packet))
+                if not verify_checksum(pseudo + tcp_packet):
+                    continue
+
                 # Unpack the received TCP header
                 tcph = struct.unpack('!HHLLBBHHH', tcp_packet[:20])
                 src_port, dest_port, pkt_seq, pkt_ack, flags, win_size = (
