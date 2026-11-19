@@ -58,7 +58,7 @@ from .congestion_control import (
 )
 
 
-# Connection structure 
+# Connection structure
 # This structure holds connection and its state information
 conn_struct = namedtuple('conn_struct', [
     'client_ip',
@@ -321,42 +321,45 @@ def send_tcp_data_segment(s, src_ip, dest_ip, src_port, dst_port, seq, ack_seq, 
     #       need to modify in full schema
     flags = 0x18
     offset_res = (5 << 4) + 0
-    window = 65535
+    if window is None:
+        window = 65535
+    else:
+        window = max(0, min(int(window), 65535))
     urg_ptr = 0
     draft_checksum = 0
-    
+
     # Build draft header with no checksum
     tcp_header_temp = struct.pack('!HHLLBBHHH',
         src_port, dst_port, seq, ack_seq,
         offset_res, flags, window, draft_checksum, urg_ptr
     )
-    
+
     tcp_len = len(tcp_header_temp) + len(payload)
     pseudo = struct.pack('!4s4sBBH',
         socket.inet_aton(src_ip), socket.inet_aton(dest_ip),
         0, socket.IPPROTO_TCP, tcp_len
     )
 
-    # Calculate the checksum    
+    # Calculate the checksum
     tcp_checksum = checksum(pseudo + tcp_header_temp + payload)
 
-    # Build the full TCP packet header    
+    # Build the full TCP packet header
     tcp_header = struct.pack('!HHLLBBHHH',
         src_port, dst_port, seq, ack_seq,
         offset_res, flags, window, tcp_checksum, urg_ptr
     )
 
-    # Build the full IP packet header     
+    # Build the full IP packet header
     ip_header = build_ip_header(src_ip, dest_ip, socket.IPPROTO_TCP, len(tcp_header) + len(payload))
 
-    # Build the full packet header     
+    # Build the full packet header
     full_packet = ip_header + tcp_header + payload
 
     # Send packet
     print(f"[Streap_raw] send_tcp_data_segment: seq={seq}, ack_seq={ack_seq}, payload_len={len(payload)}, flags=0x{flags:02x}")
     print(f"[Streap_raw] send_tcp_data_segment: TCP header seq={seq}, ack_seq={ack_seq}, flags=0x{flags:02x}")
     s.sendto(full_packet, (dest_ip, 0))
-    
+
     return len(payload)
 
 
@@ -877,13 +880,13 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
     client_key = (client_ip, client_port)
     listen_ip = conn_info.server_ip
     listen_port = conn_info.server_port
-    
+
     with connections_lock:
         if client_key not in connections:
             print(f"[Streap_raw] run_conn_send Connection not found for {client_ip}:{client_port}")
             return -1
         session = connections[client_key]
-    
+
     try:
         total_len = len(payload)
         offset = 0
@@ -906,8 +909,15 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
                     chunk = payload[offset:offset + chunk_len]
 
                     send_tcp_data_segment(
-                        s, listen_ip, client_ip, listen_port, client_port,
-                        seq=session.server_seq, ack_seq=session.client_seq, payload=chunk
+                        s,
+                        listen_ip,
+                        client_ip,
+                        listen_port,
+                        client_port,
+                        seq=session.server_seq,
+                        ack_seq=session.client_seq,
+                        payload=chunk,
+                        window=session.rcv_wnd,
                     )
 
                     new_queue = list(session.retrans_queue)
@@ -925,8 +935,15 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
                 session, retrans_pkt = check_retransmission_timeout(session, now)
                 if retrans_pkt:
                     send_tcp_data_segment(
-                        s, listen_ip, client_ip, listen_port, client_port,
-                        seq=retrans_pkt['seq'], ack_seq=session.client_seq, payload=retrans_pkt['payload']
+                        s,
+                        listen_ip,
+                        client_ip,
+                        listen_port,
+                        client_port,
+                        seq=retrans_pkt["seq"],
+                        ack_seq=session.client_seq,
+                        payload=retrans_pkt["payload"],
+                        window=session.rcv_wnd,
                     )
                     session = on_timeout_detected(session)
 
@@ -937,8 +954,15 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
                 if offset < total_len and should_send_window_probe(session, now):
                     probe_chunk = payload[offset:offset + 1]
                     send_tcp_data_segment(
-                        s, listen_ip, client_ip, listen_port, client_port,
-                        seq=session.server_seq, ack_seq=session.client_seq, payload=probe_chunk
+                        s,
+                        listen_ip,
+                        client_ip,
+                        listen_port,
+                        client_port,
+                        seq=session.server_seq,
+                        ack_seq=session.client_seq,
+                        payload=probe_chunk,
+                        window=session.rcv_wnd,
                     )
                     session = session._replace(last_probe_time=now)
 
@@ -947,7 +971,7 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
             time.sleep(0.005)
 
         return total_len
-        
+
     except Exception as e:
         print(f"[Streap_raw] run_conn_send Error in run_conn_send: {e}")
         return -1
