@@ -42,6 +42,7 @@ from .flow_control import (
     update_peer_window,
     get_send_allowance,
     should_send_window_probe,
+    calculate_advertised_window
     
 )
 from .reliability_control import (
@@ -219,7 +220,7 @@ def checksum(msg):
     return ~s & 0xffff
 
 
-def build_tcp_packet(src_ip, dest_ip, src_port, dst_port, seq, ack_seq, syn=0, ack=0, fin=0):
+def build_tcp_packet(src_ip, dest_ip, src_port, dst_port, seq, ack_seq, syn=0, ack=0, fin=0, window=None):
     """Stitches a structurally flawless 20-byte TCP header.
 
     Args:
@@ -235,7 +236,11 @@ def build_tcp_packet(src_ip, dest_ip, src_port, dst_port, seq, ack_seq, syn=0, a
     """
     flags = (ack << 4) + (syn << 1) + fin
     offset_res = (5 << 4) + 0  # 20 bytes data offset (5 * 4)
-    window = 5840
+    # window = 5840
+    if window is None:
+        window = 65535
+    else:
+        window = max(0, min(int(window), 65535))
     urg_ptr = 0
     draft_checksum = 0
 
@@ -834,11 +839,21 @@ def run_conn_recv(s: socket.socket, conn_info: conn_struct) -> bytes:
                             next_ack = pkt_seq + len(raw_payload)
 
                     # Send cumulative ACK
-                    ack_packet = build_tcp_packet(session.server_ip, client_ip, listen_port, client_port,
-                                                  seq=session.server_seq, ack_seq=next_ack, ack=1)
+                    unhandled_bytes = len(deliverable_payload) + sum(len(chunk) for chunk in session.rcv_buffer.values())
+                    last_byte_read = session.client_seq - unhandled_bytes
+                    advertised_rwnd = calculate_advertised_window(session, last_byte_read)
+
+                    # Send cumulative ACK along with window size
+                    ack_packet = build_tcp_packet(
+                        session.server_ip, client_ip, listen_port, client_port,
+                        seq=session.server_seq, 
+                        ack_seq=next_ack, 
+                        ack=1,
+                        window=advertised_rwnd
+                    )
                     ip_header = build_ip_header(session.server_ip, client_ip, socket.IPPROTO_TCP, len(ack_packet))
                     s.sendto(ip_header + ack_packet, (client_ip, 0))
-                    print(f"[Streap_raw] Sent ACK for data (Ack={next_ack})")
+                    print(f"[Streap_raw] Sent ACK for data (Ack={next_ack}), Advertised_rwnd={advertised_rwnd}")
                         
                     # Return in-order received payload if available
                     if len(deliverable_payload) > 0:
