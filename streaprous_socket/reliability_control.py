@@ -89,6 +89,7 @@ def check_and_handle_timeout(session, current_time: float): # -> sender
     session = session._replace(
         timer_active=True,
         timer_start_time=current_time,
+        timeout_interval = 2 * session.timeout_interval
     )
     return session, oldest
 
