@@ -41,7 +41,7 @@ _SYN_KEY = ("SYN", None)
 
 def _packet_dispatcher(s, listen_port):
     from streaprous_socket.streaprous_raw_connection import verify_checksum
-    
+
     global _packet_dispatcher_running
     s.settimeout(0.2)                      # lets the loop notice a stop request
     while _packet_dispatcher_running:
@@ -63,10 +63,10 @@ def _packet_dispatcher(s, listen_port):
             if dest_port != listen_port:   
                 continue
 
-            pseudo_header = struct.pack('!4s4sBBH', packet[12:16], packet[16:20], 0, socket.IPPROTO_TCP, len(tcp))
+            pseudo = struct.pack('!4s4sBBH', packet[12:16], packet[16:20], 0, socket.IPPROTO_TCP, len(tcp))
 
             # Verify checksum to skip if bit errors 
-            if not verify_checksum(pseudo_header + tcp):
+            if not verify_checksum(pseudo + tcp):
                 continue
 
             flags = tcp[13]
