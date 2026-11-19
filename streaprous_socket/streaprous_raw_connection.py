@@ -310,7 +310,7 @@ def build_ip_header(src_ip, dest_ip, protocol, payload_len):
     return ip_header
 
 
-def send_tcp_data_segment(s, src_ip, dest_ip, src_port, dst_port, seq, ack_seq, payload):
+def send_tcp_data_segment(s, src_ip, dest_ip, src_port, dst_port, seq, ack_seq, payload, window=None):
     """Assembles and transmits a single TCP segment containing data payload.
 
     Args:
@@ -331,7 +331,11 @@ def send_tcp_data_segment(s, src_ip, dest_ip, src_port, dst_port, seq, ack_seq, 
     #       need to modify in full schema
     flags = 0x18
     offset_res = (5 << 4) + 0
-    window = 5840
+    # window = 5840
+    if window is None:
+        window = 65535
+    else:
+        window = max(0, min(int(window), 65535))
     urg_ptr = 0
     draft_checksum = 0
     
@@ -815,8 +819,10 @@ def run_conn_recv(s: socket.socket, conn_info: conn_struct) -> bytes:
                         
                         if should_retransmit and len(session.unacked_queue) > 0:
                             retrans_pkt = session.unacked_queue[0]
+                            current_free_wnd = max(0, session.rcv_wnd - sum(len(c) for c in session.rcv_buffer.values()))
                             send_tcp_data_segment(s, listen_ip, client_ip, listen_port, client_port, 
-                            seq = retrans_pkt['seq'], ack_seq=session.client_seq, payload=retrans_pkt['payload'])
+                            seq = retrans_pkt['seq'], ack_seq=session.client_seq, payload=retrans_pkt['payload'],
+                            window=current_free_wnd)
                             retrans_pkt['is_retransmitted'] = True
             
             if (psh_flag and ack_flag) or (ack_flag and has_data and not syn_flag and not fin_flag and not rst_flag):
@@ -910,6 +916,7 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
         offset = 0
 
         while offset < total_len or len(session.unacked_queue) > 0:
+            current_free_wnd = max(0, session.rcv_wnd - sum(len(c) for c in session.rcv_buffer.values()))
             # Probing
             # If peer advertises rwnd == 0 and there is still pending data to send (offset < total_len):
             # When should_send_window_probe(session, now) is True:
@@ -918,7 +925,7 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
                 probe_chunk = payload[offset:offset + 1]
                 send_tcp_data_segment(
                     s, listen_ip, client_ip, listen_port, client_port,
-                    seq=session.server_seq, ack_seq=session.client_seq, payload=probe_chunk
+                    seq=session.server_seq, ack_seq=session.client_seq, payload=probe_chunk, window=current_free_wnd
                 )
                 now = time.time()
                 offset += 1
@@ -946,7 +953,7 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
 
                 send_tcp_data_segment(
                     s, listen_ip, client_ip, listen_port, client_port,
-                    seq=session.server_seq, ack_seq=session.client_seq, payload=chunk
+                    seq=session.server_seq, ack_seq=session.client_seq, payload=chunk, window=current_free_wnd
                 )
 
                 now = time.time()
@@ -975,8 +982,8 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
             if retrans_pkt:
                 send_tcp_data_segment(
                     s, listen_ip, client_ip, listen_port, client_port,
-                    seq=retrans_pkt['seq'], ack_seq=session.client_seq, payload=retrans_pkt['payload']
-                )
+                    seq=retrans_pkt['seq'], ack_seq=session.client_seq, payload=retrans_pkt['payload'],
+                    window=current_free_wnd)
 
             # event: ack received:
             try:
@@ -1055,7 +1062,7 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
 
                 if retrans_pkt:
                     send_tcp_data_segment(s, listen_ip, client_ip, listen_port, client_port,
-                    seq=retrans_pkt['seq'], ack_seq=session.client_seq, payload=retrans_pkt['payload'])
+                    seq=retrans_pkt['seq'], ack_seq=session.client_seq, payload=retrans_pkt['payload'], window=current_free_wnd)
 
 
             time.sleep(0.005)
