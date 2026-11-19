@@ -321,7 +321,7 @@ def send_tcp_data_segment(s, src_ip, dest_ip, src_port, dst_port, seq, ack_seq, 
     #       need to modify in full schema
     flags = 0x18
     offset_res = (5 << 4) + 0
-    window = 5840
+    window = 65535
     urg_ptr = 0
     draft_checksum = 0
     
