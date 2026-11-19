@@ -26,7 +26,6 @@ import threading
 import queue
 import time
 
-from streaprous_socket.streaprous_raw_connection import verify_checksum
 
 # Global structure for packet dispatcher
 # The multi connections are managed by client_key map to queue.Queue
@@ -41,6 +40,8 @@ _current_raw_socket = None
 _SYN_KEY = ("SYN", None)
 
 def _packet_dispatcher(s, listen_port):
+    from streaprous_socket.streaprous_raw_connection import verify_checksum
+    
     global _packet_dispatcher_running
     s.settimeout(0.2)                      # lets the loop notice a stop request
     while _packet_dispatcher_running:
