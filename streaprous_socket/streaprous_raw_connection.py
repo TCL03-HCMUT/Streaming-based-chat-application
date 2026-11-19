@@ -220,23 +220,6 @@ def checksum(msg):
     return ~s & 0xffff
 
 
-def verify_checksum(msg):
-    """Check if checksum is valid
-
-    Args:
-         msg message data
-    """
-    if len(msg) % 2 == 1:
-        msg += b'\x00'
-    s = 0
-    for i in range(0, len(msg), 2):
-        w = struct.unpack('!H', msg[i:i+2])[0]
-        s += w
-    s = (s >> 16) + (s & 0xffff)
-    s += (s >> 16)
-    return s == 0xffff
-
-
 def build_tcp_packet(src_ip, dest_ip, src_port, dst_port, seq, ack_seq, syn=0, ack=0, fin=0, window=None):
     """Stitches a structurally flawless 20-byte TCP header.
 
