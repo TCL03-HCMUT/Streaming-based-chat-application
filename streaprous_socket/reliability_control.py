@@ -1,8 +1,5 @@
 import time
 
-from typing import TYPE_CHECKING
-if TYPE_CHECKING:
-    from .streaprous_raw_connection import conn_struct
 
 DEFAULT_TIMEOUT = 1.0
 ALPHA = 0.125
@@ -35,11 +32,11 @@ def update_rtt_and_timeout(session, sample_rtt: float): # -> sender
         drtt = (1 - BETA) * drtt + BETA * abs(ertt - sample_rtt)
 
     to = ertt + 4 * drtt
-
+    to = max(1, to)
     return session._replace(estimated_rtt=ertt, deviation_rtt=drtt, timeout_interval=to)
 
 def handle_ack(
-    session: conn_struct,
+    session,
     ack_seq: int,
     current_time: float,
     has_data: bool,
@@ -79,7 +76,7 @@ def handle_ack(
 
     return session, False
 
-def check_and_handle_timeout(session: conn_struct, current_time: float): # -> sender
+def check_and_handle_timeout(session, current_time: float): # -> sender
     if not session.timer_active or len(session.unacked_queue) == 0:
         return session, None
 
@@ -109,14 +106,12 @@ def handle_incoming_data(session, pkt_seq: int, payload: bytes): # -> receiver
         session.rcv_buffer[pkt_seq] = payload
         return session, delivered_data, expected_seq
 
-    while pkt_seq == expected_seq:
+    while True:
         delivered_data += payload
         expected_seq += len(payload)
 
         if session.rcv_buffer.get(expected_seq, None) is not None:
             payload = session.rcv_buffer.pop(expected_seq)
-            pkt_seq += len(payload)
-
         else:
             break
 
