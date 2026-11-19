@@ -16,8 +16,9 @@ def update_peer_window(session, win_size: int):
     return session._replace(rwnd=max(0, int(win_size)))
 
 def get_send_allowance(session) -> int:
-    flight_size = session.server_seq - session.snd_una
-    allowance = max(0, int(session.rwnd - flight_size))
+    flight_size = session.server_seq - session.send_base
+    effective_window = min(session.cwnd, session.rwnd)
+    allowance = max(0, int(effective_window - flight_size))
     return allowance
 
 def should_send_window_probe(session, current_time: float) -> bool:
