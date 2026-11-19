@@ -1,7 +1,4 @@
 from enum import Enum
-from typing import TYPE_CHECKING
-if TYPE_CHECKING:
-    from .streaprous_raw_connection import conn_struct
 
 DEFAULT_MSS = 1460
 DEFAULT_SSTHRESH = 65535
@@ -22,7 +19,7 @@ def init_congestion_control(initial_seq: int = 0, mss: int = DEFAULT_MSS):
     }
 
 
-def update_congestion(session: conn_struct, ack_seq: int, is_dup_ack: bool | None = None):
+def update_congestion(session, ack_seq: int, is_dup_ack: bool | None = None):
     # TODO: Handle new ACK vs Duplicate ACK
     cwnd = session.cwnd
     ssthresh = session.ssthresh
@@ -76,7 +73,7 @@ def update_congestion(session: conn_struct, ack_seq: int, is_dup_ack: bool | Non
     ), should_retransmit
 
 
-def on_timeout_detected(session: conn_struct):
+def on_timeout_detected(session):
     cwnd = session.cwnd
     ssthresh = session.ssthresh
     dup_acks = session.dup_acks

@@ -994,6 +994,34 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
                 tcp_header_len = ((tcp_packet[12] >> 4) & 0x0F) * 4
                 has_data = len(tcp_packet) > tcp_header_len
 
+                # Handle FIN (connection close)
+                if fin_flag:
+                    print(f"[Streap_raw] Received FIN from {client_ip}:{client_port}")
+                    # Send ACK for FIN
+                    ack_packet = build_tcp_packet(listen_ip, client_ip, listen_port, client_port,
+                                                    seq=session.server_seq, ack_seq=pkt_seq + 1, ack=1)
+                    ip_header = build_ip_header(listen_ip, client_ip, socket.IPPROTO_TCP, len(ack_packet))
+                    s.sendto(ip_header + ack_packet, (client_ip, 0))
+                    
+                    with connections_lock:
+                        if client_key in connections:
+                            del connections[client_key]
+                    # Clean up packet queue
+                    remove_packet_queue(client_key)
+                    return -1
+    
+                # Handle RST (connection reset)
+                if rst_flag:
+                    print(f"[Streap_raw] Received RST from {client_ip}:{client_port}")
+                    with connections_lock:
+                        if client_key in connections:
+                            del connections[client_key]
+                    # Clean up packet queue
+                    remove_packet_queue(client_key)
+                    return -1
+    
+
+
                 retrans_pkt = None
                 if ack_flag and not syn_flag and not rst_flag and dest_port == listen_port and src_port == client_port:
                     with connections_lock:
@@ -1010,6 +1038,7 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
                             retrans_pkt = session.unacked_queue[0]
                             retrans_pkt['is_retransmitted'] = True
                         connections[client_key] = session
+            
 
                 if retrans_pkt:
                     send_tcp_data_segment(s, listen_ip, client_ip, listen_port, client_port,
