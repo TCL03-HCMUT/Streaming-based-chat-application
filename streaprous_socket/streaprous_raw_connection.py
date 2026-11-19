@@ -220,6 +220,23 @@ def checksum(msg):
     return ~s & 0xffff
 
 
+def verify_checksum(msg):
+    """Check if checksum is valid
+
+    Args:
+         msg message data
+    """
+    if len(msg) % 2 == 1:
+        msg += b'\x00'
+    s = 0
+    for i in range(0, len(msg), 2):
+        w = struct.unpack('!H', msg[i:i+2])[0]
+        s += w
+    s = (s >> 16) + (s & 0xffff)
+    s += (s >> 16)
+    return s == 0xffff
+
+
 def build_tcp_packet(src_ip, dest_ip, src_port, dst_port, seq, ack_seq, syn=0, ack=0, fin=0, window=None):
     """Stitches a structurally flawless 20-byte TCP header.
 
@@ -501,6 +518,11 @@ def accept(s: socket.socket, listen_ip: str, listen_port: int, interface_name: s
             if len(tcp_packet) < 20:
                 continue
 
+            # Verify checksum to prevent bit errors
+            pseudo = struct.pack('!4s4sBBH', packet[12:16], packet[16:20], 0, socket.IPPROTO_TCP, len(tcp_packet))
+            if not verify_checksum(pseudo + tcp_packet):
+                continue
+
             # Unpack the received TCP header
             tcph = struct.unpack('!HHLLBBHHH', tcp_packet[:20])
             src_port, dest_port, pkt_seq, pkt_ack, flags, win_size = (
@@ -602,6 +624,11 @@ def accept(s: socket.socket, listen_ip: str, listen_port: int, interface_name: s
                     tcp_packet = packet[ihl:]
                     
                     if len(tcp_packet) < 20:
+                        continue
+
+                    # Verify checksum to prevent bit errors
+                    pseudo = struct.pack('!4s4sBBH', packet[12:16], packet[16:20], 0, socket.IPPROTO_TCP, len(tcp_packet))
+                    if not verify_checksum(pseudo + tcp_packet):
                         continue
 
                     # Unpack the received TCP header
@@ -734,6 +761,11 @@ def run_conn_recv(s: socket.socket, conn_info: conn_struct) -> bytes:
             tcp_packet = packet[ihl:]
             
             if len(tcp_packet) < 20:
+                continue
+
+            # Verify checksum to prevent bit errors
+            pseudo = struct.pack('!4s4sBBH', packet[12:16], packet[16:20], 0, socket.IPPROTO_TCP, len(tcp_packet))
+            if not verify_checksum(pseudo + tcp_packet):
                 continue
 
             # Unpack the received TCP header
@@ -996,6 +1028,11 @@ def run_conn_send(s: socket.socket, conn_info: conn_struct, payload: bytes) -> i
             tcp_packet = packet[ihl:]
             
             if len(tcp_packet) >= 20:
+                # Verify checksum to prevent bit errors
+                pseudo = struct.pack('!4s4sBBH', packet[12:16], packet[16:20], 0, socket.IPPROTO_TCP, len(tcp_packet))
+                if not verify_checksum(pseudo + tcp_packet):
+                    continue
+
                 # Unpack the received TCP header
                 tcph = struct.unpack('!HHLLBBHHH', tcp_packet[:20])
                 src_port, dest_port, pkt_seq, pkt_ack, flags, win_size = (
