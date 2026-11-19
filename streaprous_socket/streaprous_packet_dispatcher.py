@@ -26,6 +26,8 @@ import threading
 import queue
 import time
 
+from streaprous_socket.streaprous_raw_connection import verify_checksum
+
 # Global structure for packet dispatcher
 # The multi connections are managed by client_key map to queue.Queue
 _packet_queues = {}
@@ -59,6 +61,13 @@ def _packet_dispatcher(s, listen_port):
             # Verify the received packet matching the listen port
             if dest_port != listen_port:   
                 continue
+
+            pseudo_header = struct.pack('!4s4sBBH', packet[12:16], packet[16:20], 0, socket.IPPROTO_TCP, len(tcp))
+
+            # Verify checksum to skip if bit errors 
+            if not verify_checksum(pseudo_header + tcp):
+                continue
+
             flags = tcp[13]
             is_syn = (flags & 0x02) and not (flags & 0x10)
             is_ack = (flags & 0x10)
