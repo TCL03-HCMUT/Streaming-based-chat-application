@@ -216,7 +216,7 @@ class HttpAdapter:
         
         # Wait longer to ensure response is transmitted, client processes it, and sends ACK
         import time
-        time.sleep(5.0)
+        time.sleep(0.1)
         
         # Close connection with FIN packet
         #

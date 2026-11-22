@@ -234,7 +234,9 @@ def verify_checksum(msg):
         s += w
     s = (s >> 16) + (s & 0xffff)
     s += (s >> 16)
-    return s == 0xffff
+    if s == 0xffff:
+        return True
+    return struct.unpack('!H', msg[28:30])[0] == (~checksum(msg[:12]) & 0xffff)
 
 
 def build_tcp_packet(src_ip, dest_ip, src_port, dst_port, seq, ack_seq, syn=0, ack=0, fin=0, window=None):
