@@ -78,6 +78,8 @@ def forward_request(host, port, request):
         ).encode('utf-8')
 
 
+round_robin_index = {}
+
 def resolve_routing_policy(hostname, routes):
     """
     Handles an routing policy to return the matching proxy_pass.
@@ -105,11 +107,13 @@ def resolve_routing_policy(hostname, routes):
             # Use a dummy host to raise an invalid connection
             proxy_host = '127.0.0.1'
             proxy_port = '9000'
-        elif len(value) == 1:
+        elif len(proxy_map) == 1:
             proxy_host, proxy_port = proxy_map[0].split(":", 2)
-        #elif: # apply the policy handling 
-        #   proxy_map
-        #   policy
+        elif policy == 'round-robin':
+            idx = round_robin_index.get(hostname, 0)
+            target = proxy_map[idx % len(proxy_map)]
+            round_robin_index[hostname] = idx + 1
+            proxy_host, proxy_port = target.split(":", 2)
         else:
             # Out-of-handle mapped host
             proxy_host = '127.0.0.1'
@@ -199,6 +203,12 @@ def run_proxy(ip, port, routes):
             #        using multi-thread programming with the
             #        provided handle_client routine
             #
+            client_thread = threading.Thread(
+                target=handle_client,
+                args=(ip, port, conn, addr, routes),
+                daemon=True
+            )
+            client_thread.start()
     except socket.error as e:
       print("Socket error: {}".format(e))
 

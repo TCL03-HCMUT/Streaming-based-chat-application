@@ -116,6 +116,7 @@ class Request():
 
         self._raw_headers, self._raw_body = self.fetch_headers_body(request)
         self.headers = self.prepare_headers(self._raw_headers)
+        self.body = self._raw_body
         print("[Request] Parsed headers: {}".format(self.headers))
 
         #
@@ -139,6 +140,7 @@ class Request():
             #
             #  TODO: implement the cookie function here
             #        by parsing the header            #
+        self.prepare_cookies(cookies)
 
         return
 
@@ -169,4 +171,10 @@ class Request():
         return
 
     def prepare_cookies(self, cookies):
-            self.headers["Cookie"] = cookies
+        self.headers["Cookie"] = cookies
+        self.cookies = {}
+        if cookies:
+            for item in cookies.split(";"):
+                k, v = item.strip().split("=", 1)
+                self.cookies[k] = v
+        self.headers["cookies"] = self.cookies

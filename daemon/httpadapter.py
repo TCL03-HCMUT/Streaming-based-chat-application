@@ -166,10 +166,26 @@ class HttpAdapter:
 
         # Receive data using streaprous raw connection
         data = run_conn_recv(raw_socket, conn_info)
+        while data and b"\r\n\r\n" not in data:
+            chunk = run_conn_recv(raw_socket, conn_info)
+            if not chunk:
+                break
+            data += chunk
         
         if not data:
             print("[HttpAdapter] No data received or connection closed")
             return
+
+        if b"\r\n\r\n" in data:
+            header_part, body_part = data.split(b"\r\n\r\n", 1)
+            headers = req.prepare_headers(header_part.decode("utf-8"))
+            content_len = int(headers.get("content-length", "0"))
+            while len(body_part) < content_len:
+                chunk = run_conn_recv(raw_socket, conn_info)
+                if not chunk:
+                    break
+                body_part += chunk
+            data = header_part + b"\r\n\r\n" + body_part
 
         # Prepare request
         msg = data.decode("utf-8")
@@ -180,7 +196,11 @@ class HttpAdapter:
             #
             # TODO: handle for App hook here
             #
-            response = ""
+            result = req.hook(req.headers, req.body)
+            if isinstance(result, bytes) and result.startswith(b"HTTP/1.1"):
+                response = result
+            else:
+                response = resp.build_response(req, envelop_content=result)
         else:
             # Build response - returns bytes
             response = resp.build_response(req)

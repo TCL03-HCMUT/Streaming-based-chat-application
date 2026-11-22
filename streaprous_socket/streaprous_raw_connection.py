@@ -724,6 +724,84 @@ def accept(s: socket.socket, listen_ip: str, listen_port: int, interface_name: s
         raise
 
 
+def connect(s: socket.socket, src_ip: str, src_port: int, dest_ip: str, dest_port: int, interface_name: str = None) -> conn_struct:
+    """
+    Initiate a connection to a remote server by performing the 3-way handshake using raw sockets.
+    """
+    start_packet_dispatcher(s, src_port)
+
+    if src_ip == "0.0.0.0":
+        send_ip = get_interface_ip(interface_name)
+    else:
+        send_ip = src_ip
+
+    client_seq = 1000
+    server_key = (dest_ip, dest_port)
+    remove_packet_queue(server_key)
+    q = get_packet_queue(server_key)
+
+    syn_packet = build_tcp_packet(send_ip, dest_ip, src_port, dest_port,
+                                  seq=client_seq, ack_seq=0, syn=1, ack=0)
+    ip_header = build_ip_header(send_ip, dest_ip, socket.IPPROTO_TCP, len(syn_packet))
+    s.sendto(ip_header + syn_packet, (dest_ip, 0))
+    print(f"[Streap_raw] connect: Sent SYN to {dest_ip}:{dest_port} from {send_ip}:{src_port}")
+
+    deadline = time.time() + 10.0
+    while time.time() < deadline:
+        try:
+            packet, addr = q.get(timeout=0.5)
+        except queue.Empty:
+            continue
+
+        ihl = (packet[0] & 0x0F) * 4
+        tcp_packet = packet[ihl:]
+        if len(tcp_packet) < 20:
+            continue
+
+        pseudo = struct.pack('!4s4sBBH', packet[12:16], packet[16:20], 0, socket.IPPROTO_TCP, len(tcp_packet))
+        if not verify_checksum(pseudo + tcp_packet):
+            continue
+
+        tcph = struct.unpack('!HHLLBBHHH', tcp_packet[:20])
+        r_src_port, r_dest_port, pkt_seq, pkt_ack, flags, win_size = (
+            tcph[0], tcph[1], tcph[2], tcph[3], tcph[5], tcph[6]
+        )
+
+        if r_src_port != dest_port or r_dest_port != src_port:
+            continue
+
+        syn_flag = (flags & 0x02) >> 1
+        ack_flag = (flags & 0x10) >> 4
+
+        if syn_flag == 1 and ack_flag == 1 and pkt_ack == client_seq + 1:
+            next_seq = pkt_ack
+            next_ack = pkt_seq + 1
+            ack_packet = build_tcp_packet(send_ip, dest_ip, src_port, dest_port,
+                                          seq=next_seq, ack_seq=next_ack, syn=0, ack=1)
+            ip_header = build_ip_header(send_ip, dest_ip, socket.IPPROTO_TCP, len(ack_packet))
+            s.sendto(ip_header + ack_packet, (dest_ip, 0))
+            print(f"[Streap_raw] connect: Sent ACK to {dest_ip}:{dest_port} (Seq={next_seq}, Ack={next_ack})")
+
+            session = create_connection_struct(
+                client_ip=dest_ip,
+                client_port=dest_port,
+                server_ip=send_ip,
+                server_port=src_port,
+                state="ESTABLISHED",
+                server_seq=next_seq,
+                client_seq=next_ack,
+                expected_final_ack=0
+            )
+            session = update_peer_window(session, win_size)
+            with connections_lock:
+                connections[server_key] = session
+
+            return session
+
+    remove_packet_queue(server_key)
+    return None
+
+
 def run_conn_recv(s: socket.socket, conn_info: conn_struct) -> bytes:
     """
     Receive data on an established connection using raw sockets.

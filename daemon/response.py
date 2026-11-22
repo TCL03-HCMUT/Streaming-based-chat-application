@@ -239,6 +239,8 @@ class Response():
             "Connection": "close",
             "Server": "Streaprous/1.0",
         }
+        if 'Set-Cookie' in self.headers:
+            headers['Set-Cookie'] = self.headers['Set-Cookie']
         
         # Build HTTP response header string
         status_line = "HTTP/1.1 200 OK\r\n"
@@ -248,6 +250,27 @@ class Response():
         header_str = status_line + "\r\n".join(header_lines) + "\r\n\r\n"
         
         return header_str.encode('utf-8')
+
+
+    def build_cookie_response(self, content, cookie):
+        """
+        Constructs a 200 OK JSON response with a Set-Cookie header.
+        """
+        self.prepare_content_type(mime_type='application/json')
+        self.headers['Set-Cookie'] = cookie
+        self._content = content
+        return self.build_response_header(None) + content
+
+
+    def build_unauthorized(self):
+        return (
+                "HTTP/1.1 401 Unauthorized\r\n"
+                "Content-Type: text/html\r\n"
+                "Content-Length: 16\r\n"
+                "Connection: close\r\n"
+                "\r\n"
+                "401 Unauthorized"
+            ).encode('utf-8')
 
 
     def build_notfound(self):
@@ -293,7 +316,10 @@ class Response():
             base_dir = self.prepare_content_type(mime_type = 'text/css')
         elif mime_type == 'application/json' or mime_type == 'application/octet-stream':
             base_dir = self.prepare_content_type(mime_type = 'application/json')
-            envelop_content = ""
+            if envelop_content is not None:
+                self._content = envelop_content
+                header_bytes = self.build_response_header(request)
+                return header_bytes + envelop_content
 
         #
         # TODO: add support objects

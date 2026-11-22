@@ -19,7 +19,7 @@ def init_congestion_control(initial_seq: int = 0, mss: int = DEFAULT_MSS):
     }
 
 
-def update_congestion(session, ack_seq: int, is_dup_ack: bool | None = None):
+def update_congestion(session, ack_seq: int, is_dup_ack = None):
     # TODO: Handle new ACK vs Duplicate ACK
     cwnd = session.cwnd
     ssthresh = session.ssthresh
@@ -33,16 +33,15 @@ def update_congestion(session, ack_seq: int, is_dup_ack: bool | None = None):
     # New ACK
     if ack_seq > session.last_ack_seq:
         dup_acks = 0
-        match congestion_state:
-            case CongestionPhase.SLOW_START:
-                cwnd += mss
-                if cwnd >= ssthresh:
-                    new_state = CongestionPhase.CONGESTION_AVOIDANCE
-            case CongestionPhase.CONGESTION_AVOIDANCE:
-                cwnd += mss * (mss / cwnd)
-            case CongestionPhase.FAST_RECOVERY:
-                cwnd = ssthresh
+        if congestion_state == CongestionPhase.SLOW_START:
+            cwnd += mss
+            if cwnd >= ssthresh:
                 new_state = CongestionPhase.CONGESTION_AVOIDANCE
+        elif congestion_state == CongestionPhase.CONGESTION_AVOIDANCE:
+            cwnd += mss * (mss / cwnd)
+        elif congestion_state == CongestionPhase.FAST_RECOVERY:
+            cwnd = ssthresh
+            new_state = CongestionPhase.CONGESTION_AVOIDANCE
         last_ack = ack_seq
     # Duplicate ACK
     # According to RFC 5681: DUPLICATE ACKNOWLEDGMENT: An acknowledgment is considered a
