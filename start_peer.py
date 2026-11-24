@@ -2,7 +2,15 @@ import argparse
 import sys
 
 from apps.peer import create_peer
+from start_backend import setup_rst_block
+
+
 def main(ip, port, tracker_address):
+    is_localhost = (ip == "127.0.0.1" or ip == "::1" or ip.startswith("127.") or ip == "localhost")
+
+    if not is_localhost:
+        setup_rst_block(ip, port)
+
     create_peer(ip, port, tracker_address)
 
     return 0

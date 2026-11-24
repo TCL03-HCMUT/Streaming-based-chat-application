@@ -141,6 +141,8 @@ def connect_peer(headers="guest", body="anonymous"):
 def send_peer(headers="guest", body="anonymous"):
     info = json.loads(body)
     if not (info.get("ip") == app.ip and info.get("port") == app.port):
+        if (info["ip"], info["port"]) not in connected_peers:
+            return Response().build_unauthorized()
         info["sender"] = current_user
         send_request(info["ip"], info["port"], "/send-peer/", info)
     with peer_lock:
