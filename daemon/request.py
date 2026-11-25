@@ -84,7 +84,7 @@ class Request():
             return None, None
 
         return method, path, version
-             
+
     def prepare_headers(self, request):
         """Prepares the given HTTP headers."""
         lines = request.split('\r\n')
@@ -112,10 +112,11 @@ class Request():
         self.method, self.path, self.version = self.extract_request_line(request)
         print("[Request] {} path {} version {}".format(self.method, self.path, self.version))
 
-
-
         self._raw_headers, self._raw_body = self.fetch_headers_body(request)
         self.headers = self.prepare_headers(self._raw_headers)
+        # Body is passed to handler
+        self.body = self._raw_body
+        #self.prepare_body(self._raw_body, files=None, json=None)
         print("[Request] Parsed headers: {}".format(self.headers))
 
         #
@@ -124,7 +125,7 @@ class Request():
         #
         # TODO manage the webapp hook in this mounting point
         #
-        
+
         if not routes == {}:
             self.routes = routes
             print("[Request] Routing METHOD {} path {}".format(self.method, self.path))
@@ -136,37 +137,40 @@ class Request():
             #
 
         cookies = self.headers.get('cookie', '')
-            #
-            #  TODO: implement the cookie function here
-            #        by parsing the header            #
+        #
+        #  TODO: implement the cookie function here
+        #        by parsing the header            #
+        self.cookies = {}
+        for pair in cookies.split(";"):
+            name, _, value = pair.strip().partition("=")
+            if name:
+                self.cookies[name] = value
 
         return
 
     def prepare_body(self, data, files, json=None):
         self.prepare_content_length(self.body)
-        self.body = body
+        self.body = data
         #
         # TODO prepare the request authentication
         #
-	# self.auth = ...
+        # self.auth = ...
         return
-
 
     def prepare_content_length(self, body):
         self.headers["Content-Length"] = "0"
         #
         # TODO prepare the request authentication
         #
-	# self.auth = ...
+        # self.auth = ...
         return
-
 
     def prepare_auth(self, auth, url=""):
         #
         # TODO prepare the request authentication
         #
-	# self.auth = ...
+        # self.auth = ...
         return
 
     def prepare_cookies(self, cookies):
-            self.headers["Cookie"] = cookies
+        self.headers["Cookie"] = cookies

@@ -76,7 +76,6 @@ class Response():
         "reason",
     ]
 
-
     def __init__(self, request=None):
         """
         Initializes a new :class:`Response <Response>` object.
@@ -119,7 +118,6 @@ class Response():
         #: is a response.
         self.request = None
 
-
     def get_mime_type(self, path):
         """
         Determines the MIME type of a file based on its path.
@@ -135,7 +133,6 @@ class Response():
             return 'application/octet-stream'
         return mime_type or 'application/octet-stream'
 
-
     def prepare_content_type(self, mime_type='text/html'):
         """
         Prepares the Content-Type header and determines the base directory
@@ -147,7 +144,7 @@ class Response():
 
         :raises ValueError: If the MIME type is unsupported.
         """
-        
+
         base_dir = ""
 
         # Validate header attr existence
@@ -173,13 +170,13 @@ class Response():
             self.headers['Content-Type']='application/{}'.format(sub_type)
         #
         #  TODO: process other mime_type
-        #        application/xml       
+        #        application/xml
         #        application/zip
         #        ...
         #        text/csv
         #        text/xml
         #        ...
-        #        video/mp4 
+        #        video/mp4
         #        video/mpeg
         #        ...
         #
@@ -187,7 +184,6 @@ class Response():
             raise ValueError("Invalid MEME type: main_type={} sub_type={}".format(main_type,sub_type))
 
         return base_dir
-
 
     def build_content(self, path, base_dir):
         """
@@ -202,18 +198,17 @@ class Response():
         filepath = os.path.join(base_dir, path.lstrip('/'))
 
         print("[Response] Serving the object at location {}".format(filepath))
-            #
-            #  TODO: implement the step of fetch the object file
-            #        store in the return value of content
-            #
+        #
+        #  TODO: implement the step of fetch the object file
+        #        store in the return value of content
+        #
         try:
             with open(filepath, "rb") as f:
-               content = f.read()
+                content = f.read()
         except Exception as e:
             print("[Response] build_content exception: {}".format(e))
             return -1, b""
         return len(content), content
-
 
     def build_response_header(self, request):
         """
@@ -227,9 +222,9 @@ class Response():
         # Ensure _content is set
         if not hasattr(self, '_content') or self._content is None:
             self._content = b""
-        
+
         content_length = len(self._content)
-        
+
         # Build response headers (not request headers!)
         headers = {
             "Cache-Control": "no-cache",
@@ -239,16 +234,24 @@ class Response():
             "Connection": "close",
             "Server": "Streaprous/1.0",
         }
-        
         # Build HTTP response header string
-        status_line = "HTTP/1.1 200 OK\r\n"
+        # status_line = "HTTP/1.1 200 OK\r\n"
+        # header_lines = []
+        status_code = 200
+        reason = "OK"
+        if self.status_code is not None and self.reason is not None:
+            status_code = self.status_code
+            reason = self.reason
+        status_line = "HTTP/1.1 {} {}\r\n".format(status_code, reason)
         header_lines = []
         for key, value in headers.items():
             header_lines.append("{}: {}".format(key, value))
+        # Set-Cookie
+        for name, value in self.cookies.items():
+            header_lines.append("Set-Cookie: {}={}; Path=/".format(name, value))
         header_str = status_line + "\r\n".join(header_lines) + "\r\n\r\n"
-        
-        return header_str.encode('utf-8')
 
+        return header_str.encode('utf-8')
 
     def build_notfound(self):
         """
@@ -268,7 +271,6 @@ class Response():
                 "404 Not Found"
             ).encode('utf-8')
 
-
     def build_response(self, request, envelop_content=None):
         """
         Builds a full HTTP response including headers and content based on the request.
@@ -286,7 +288,7 @@ class Response():
 
         base_dir = ""
 
-        #If HTML, parse and serve embedded objects
+        # If HTML, parse and serve embedded objects
         if path.endswith('.html') or mime_type == 'text/html':
             base_dir = self.prepare_content_type(mime_type = 'text/html')
         elif mime_type == 'text/css':
@@ -303,13 +305,13 @@ class Response():
 
         # Build content
         content_length, content = self.build_content(path, base_dir)
-        
+
         if content_length < 0:
             return self.build_notfound()
-        
+
         self._content = content
-        
+
         # Build response header
         header_bytes = self.build_response_header(request)
-        
+
         return header_bytes + content

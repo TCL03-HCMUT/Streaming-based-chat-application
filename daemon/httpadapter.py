@@ -26,6 +26,7 @@ from .dictionary import CaseInsensitiveDict
 
 import asyncio
 import inspect
+import secrets
 import time
 
 # Import streaprous raw connection functions
@@ -34,7 +35,12 @@ from streaprous_socket.streaprous_raw_connection import (
     run_conn_send,
     close_connection
 )
-
+SESSIONS = {}
+LOGIN_REQUIRED = {
+    ("POST", "/submit-info/"),
+    ("POST", "/add-list/"),
+    ("GET", "/get-list/"),
+}
 class HttpAdapter:
     """
     A mutable :class:`HTTP adapter <HTTP adapter>` for managing client connections
@@ -98,6 +104,65 @@ class HttpAdapter:
         self.conn_info = None
         #: raw socket for streaprous communication
         self.raw_socket = None
+
+    def read_request(self, read_more):
+        data = b""
+        while b"\r\n\r\n" not in data:
+            chunk = read_more()
+            if not chunk:
+                return data
+            data += chunk
+
+        head, _, body = data.partition(b"\r\n\r\n")
+
+        #  Find content length in header
+        length = 0
+        for line in head.split(b"\r\n"):
+            name, _, value = line.partition(b":")
+            if name.strip().lower() == b"content-length":
+                length = int(value.strip())
+
+        while len(body) < length:
+            chunk = read_more()
+            if not chunk:
+                break
+            body += chunk
+
+        return head + b"\r\n\r\n" + body
+
+    def call_hook(self, req, resp):
+        user = SESSIONS.get(req.cookies.get("session"))
+        # 401
+        if (req.method, req.path) in LOGIN_REQUIRED and user is None:
+            print("[HttpAdapter] Unauthorized {} {}".format(req.method, req.path))
+            result = b'{"error": "Unauthorized"}'
+            resp.status_code = 401
+            resp.reason = "Unauthorized"
+        else:
+            try:
+                # Tell handler who logged in 
+                req.headers["username"] = user or ""
+                result = req.hook(headers=req.headers, body=req.body)
+                # async def handler: run the coroutine
+                if inspect.iscoroutine(result):
+                    result = asyncio.run(result)
+                # Login handler return (body, username)
+                if isinstance(result, tuple):
+                    result, username = result
+                    session_id = secrets.token_hex(16)
+                    SESSIONS[session_id] = username
+                    resp.cookies = {"session": session_id}
+                resp.status_code = 200
+                resp.reason = "OK"
+            except Exception as e:
+                print("[HttpAdapter] Route handler error: {}".format(e))
+                result = b'{"error": "Internal Server Error"}'
+                resp.status_code = 500
+                resp.reason = "Internal Server Error"
+
+        resp.headers["Content-Type"] = "application/json"
+        resp._content = result
+        return resp.build_response_header(req) + result
 
     def handle_client(self, conn, addr, routes):
         """
@@ -165,8 +230,9 @@ class HttpAdapter:
         print("[HttpAdapter] Invoke handle_client_raw for {}:{}".format(conn_info.client_ip, conn_info.client_port))
 
         # Receive data using streaprous raw connection
-        data = run_conn_recv(raw_socket, conn_info)
-        
+        # data = run_conn_recv(raw_socket, conn_info)
+        data = self.read_request(lambda: run_conn_recv(raw_socket, conn_info))
+
         if not data:
             print("[HttpAdapter] No data received or connection closed")
             return
@@ -174,17 +240,18 @@ class HttpAdapter:
         # Prepare request
         msg = data.decode("utf-8")
         req.prepare(msg, routes)
-        
+
         # Handle request hook
         if req.hook:
             #
             # TODO: handle for App hook here
             #
-            response = ""
+            # response = ""
+            response = self.call_hook(req, resp)
         else:
             # Build response - returns bytes
             response = resp.build_response(req)
-        
+
         # Send response using streaprous raw connection
         response = response if isinstance(response, bytes) else response.encode("utf-8")
         print(f"[HttpAdapter] HTTP Response ({len(response)} bytes): {response[:200]}")
@@ -192,12 +259,11 @@ class HttpAdapter:
         # TODO run_conn_send packet
         # run_conn_send(..)
         run_conn_send(raw_socket, conn_info, response)
-        
-        
+
         # Wait longer to ensure response is transmitted, client processes it, and sends ACK
         import time
         time.sleep(5.0)
-        
+
         # Close connection with FIN packet
         #
         # TODO run_conn_send packet
@@ -227,7 +293,6 @@ class HttpAdapter:
         # TODO Handle the request asynchronously
         msg = await reader.read(1024)
 
-
         req.prepare(msg.decode("utf-8"), routes={})
 
         # Handle request hook
@@ -238,7 +303,7 @@ class HttpAdapter:
             response = ""
 
         # Build response
-        #print("[HttpAdapter] Start **ASYNC** build_response with type {}".format(type(req)))
+        # print("[HttpAdapter] Start **ASYNC** build_response with type {}".format(type(req)))
         response = resp.build_response(req)
 
         # Send all the response asynchronously
@@ -314,35 +379,33 @@ class HttpAdapter:
 
         return response
 
-
     # def get_connection(self, url, proxies=None):
-        # """Returns a url connection for the given URL. 
+    # """Returns a url connection for the given URL.
 
-        # :param url: The URL to connect to.
-        # :param proxies: (optional) A Requests-style dictionary of proxies used on this request.
-        # :rtype: int
-        # """
+    # :param url: The URL to connect to.
+    # :param proxies: (optional) A Requests-style dictionary of proxies used on this request.
+    # :rtype: int
+    # """
 
-        # proxy = select_proxy(url, proxies)
+    # proxy = select_proxy(url, proxies)
 
-        # if proxy:
-            # proxy = prepend_scheme_if_needed(proxy, "http")
-            # proxy_url = parse_url(proxy)
-            # if not proxy_url.host:
-                # raise InvalidProxyURL(
-                    # "Please check proxy URL. It is malformed "
-                    # "and could be missing the host."
-                # )
-            # proxy_manager = self.proxy_manager_for(proxy)
-            # conn = proxy_manager.connection_from_url(url)
-        # else:
-            # # Only scheme should be lower case
-            # parsed = urlparse(url)
-            # url = parsed.geturl()
-            # conn = self.poolmanager.connection_from_url(url)
+    # if proxy:
+    # proxy = prepend_scheme_if_needed(proxy, "http")
+    # proxy_url = parse_url(proxy)
+    # if not proxy_url.host:
+    # raise InvalidProxyURL(
+    # "Please check proxy URL. It is malformed "
+    # "and could be missing the host."
+    # )
+    # proxy_manager = self.proxy_manager_for(proxy)
+    # conn = proxy_manager.connection_from_url(url)
+    # else:
+    # # Only scheme should be lower case
+    # parsed = urlparse(url)
+    # url = parsed.geturl()
+    # conn = self.poolmanager.connection_from_url(url)
 
-        # return conn
-
+    # return conn
 
     def add_headers(self, request):
         """
