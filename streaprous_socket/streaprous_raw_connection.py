@@ -724,6 +724,98 @@ def accept(s: socket.socket, listen_ip: str, listen_port: int, interface_name: s
         raise
 
 
+
+
+def connect(s: socket.socket, server_ip: str, server_port: int, client_port: int,
+            client_ip: str = "0.0.0.0", timeout: float = 10.0,
+            interface_name: str = None) -> conn_struct:
+    if client_ip is None or client_ip == "0.0.0.0":
+        client_ip = get_interface_ip(interface_name)
+
+    server_key = (server_ip, server_port)
+    with handshake_lock:
+        with connections_lock:
+            if handshake_in_progress.get(server_key) or server_key in connections:
+                raise OSError(f"Connection already open or in progress for {server_key}")
+        handshake_in_progress[server_key] = True
+
+    established = False
+    try:
+        q = get_packet_queue(server_key)
+        start_packet_dispatcher(s, client_port)
+
+        # Send SYN 
+        client_seq = 1000
+        syn_packet = build_tcp_packet(client_ip, server_ip, client_port, server_port,
+                                      seq=client_seq, ack_seq=0, syn=1)
+        ip_header = build_ip_header(client_ip, server_ip, socket.IPPROTO_TCP, len(syn_packet))
+        s.sendto(ip_header + syn_packet, (server_ip, 0))
+
+        # Wait for a valid SYN-ACK
+        deadline = time.time() + timeout
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                raise TimeoutError(f"No SYN-ACK from {server_ip}:{server_port}")
+            try:
+                packet, _ = q.get(timeout=remaining)
+            except queue.Empty:
+                raise TimeoutError(f"No SYN-ACK from {server_ip}:{server_port}") from None
+
+            ihl = (packet[0] & 0x0F) * 4
+            tcp_packet = packet[ihl:]
+            if ihl < 20 or len(tcp_packet) < 20:
+                continue
+            if socket.inet_ntoa(packet[16:20]) != client_ip:
+                continue
+
+            pseudo = struct.pack('!4s4sBBH', packet[12:16], packet[16:20],
+                                 0, socket.IPPROTO_TCP, len(tcp_packet))
+            if not verify_checksum(pseudo + tcp_packet):
+                continue
+
+            _, _, pkt_seq, pkt_ack, _, flags, win_size, _, _ = struct.unpack(
+                '!HHLLBBHHH', tcp_packet[:20]
+            )
+
+            # Check ACK = SYN = 1, RST = FIN = 0
+            if not (flags & 0x10) or pkt_ack != client_seq + 1:
+                continue
+            if flags & 0x04:
+                raise ConnectionRefusedError(f"Connection refused by {server_ip}:{server_port}")
+            if (flags & 0x17) != 0x12:
+                continue
+
+            # Send ACK
+            next_server_seq = (pkt_seq + 1) & 0xFFFFFFFF
+            ack_packet = build_tcp_packet(client_ip, server_ip, client_port, server_port,
+                                          seq=pkt_ack, ack_seq=next_server_seq, ack=1)
+            ip_header = build_ip_header(client_ip, server_ip, socket.IPPROTO_TCP, len(ack_packet))
+            s.sendto(ip_header + ack_packet, (server_ip, 0))
+
+            # create connection
+            session = create_connection_struct(
+                client_ip=server_ip, client_port=server_port,
+                server_ip=client_ip, server_port=client_port,
+                state="ESTABLISHED", server_seq=pkt_ack,
+                client_seq=next_server_seq, expected_final_ack=0
+            )
+            session = update_peer_window(session, win_size)
+            with connections_lock:
+                connections[server_key] = session
+
+            established = True
+            return session
+    finally:
+        if not established:
+            remove_packet_queue(server_key)
+        with handshake_lock:
+            handshake_in_progress.pop(server_key, None)
+
+
+
+
+
 def run_conn_recv(s: socket.socket, conn_info: conn_struct) -> bytes:
     """
     Receive data on an established connection using raw sockets.
