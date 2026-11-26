@@ -116,7 +116,7 @@ class Request():
         self.headers = self.prepare_headers(self._raw_headers)
         # Body is passed to handler
         self.body = self._raw_body
-        #self.prepare_body(self._raw_body, files=None, json=None)
+        # self.prepare_body(self._raw_body, files=None, json=None)
         print("[Request] Parsed headers: {}".format(self.headers))
 
         #
@@ -148,9 +148,9 @@ class Request():
 
         return
 
-    def prepare_body(self, data, files, json=None):
-        self.prepare_content_length(self.body)
+    def prepare_body(self, data, files=None, json=None):
         self.body = data
+        self.prepare_content_length(self.body)
         #
         # TODO prepare the request authentication
         #
@@ -158,7 +158,8 @@ class Request():
         return
 
     def prepare_content_length(self, body):
-        self.headers["Content-Length"] = "0"
+        # self.headers["Content-Length"] = "0"
+        self.headers["Content-Length"] = str(len(body.encode("utf-8")))
         #
         # TODO prepare the request authentication
         #
@@ -174,3 +175,10 @@ class Request():
 
     def prepare_cookies(self, cookies):
         self.headers["Cookie"] = cookies
+
+    def to_bytes(self):
+        lines = ["{} {} HTTP/1.1".format(self.method, self.path)]
+        for name, value in self.headers.items():
+            lines.append("{}: {}".format(name, value))
+        head = "\r\n".join(lines) + "\r\n\r\n"
+        return head.encode("utf-8") + (self.body or "").encode("utf-8")

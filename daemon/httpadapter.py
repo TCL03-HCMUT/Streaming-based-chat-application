@@ -130,6 +130,32 @@ class HttpAdapter:
 
         return head + b"\r\n\r\n" + body
 
+    def send_request(self, send, read_more, method, path, body="", host="", cookie=""):
+        # Build the request with the Request helpers (RFC 9112 section 2.1)
+        r = Request()
+        r.method = method
+        r.path = path
+        r.headers = {
+            "Host": host,
+            "Content-Type": "application/json",
+            "Connection": "close",
+        }
+        r.prepare_body(body)
+        if cookie:
+            r.prepare_cookies(cookie)
+        send(r.to_bytes())
+
+        # Read the response
+        response = self.read_request(read_more)
+        if not response:
+            return 0, ""
+
+        # Status line "HTTP/1.1 200 OK" -> 200 
+        head, _, resp_body = response.partition(b"\r\n\r\n")
+        status_line = head.split(b"\r\n")[0]
+        status = int(status_line.split(b" ")[1])
+        return status, resp_body.decode("utf-8")
+    
     def call_hook(self, req, resp):
         user = SESSIONS.get(req.cookies.get("session"))
         # 401
