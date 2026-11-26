@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>StreapRous</title>
+  </head>
+  <body>
+    <h2>StreapRous</h2>
+    <p id="notify" style="color: blue"></p>
+
+    <div id="login-box">
+      <h3>Login</h3>
+      Username: <input type="text" id="username" value="alice" /> Password:
+      <input type="password" id="password" value="alice" />
+      <button onclick="login()">Login</button>
+    </div>
+
+    <div id="chat-box" style="display: none">
+      <h3>Initialization Phase</h3>
+      <button onclick="submitInfo()">Submit Info</button>
+      <button onclick="getList()">Get Peer List</button>
+      <p>Active Peers: <span id="peer-list"></span></p>
+
+      <h3>Channel (Broadcast)</h3>
+      Add Channel:
+      <input type="text" id="new-channel" placeholder="channel name" />
+      <button onclick="joinChannel()">Add</button>
+      <br /><br />
+      Channel:
+      <select id="channel-select" onchange="renderMessages()"></select>
+      <div
+        id="channel-window"
+        style="
+          border: 1px solid;
+          height: 150px;
+          overflow-y: scroll;
+          padding: 8px;
+          margin-top: 6px;
+        "
+      ></div>
+      <br />
+      Message: <input type="text" id="channel-message" style="width: 300px" />
+      <button onclick="broadcastPeer()">Broadcast</button>
+
+      <h3>Direct peer</h3>
+      Peer:
+      <select id="peer-select" onchange="renderMessages()"></select>
+      <button onclick="connectPeer()">Connect Peer</button>
+      <div
+        id="peer-window"
+        style="
+          border: 1px solid;
+          height: 150px;
+          overflow-y: scroll;
+          padding: 8px;
+          margin-top: 6px;
+        "
+      ></div>
+      <br />
+      Message: <input type="text" id="peer-message" style="width: 300px" />
+      <button onclick="sendDirectPeer()">Send Direct</button>
+    </div>
+
+    <script>
+      let currentUser = "";
+      let allMessages = [];
+      let lastCount = 0;
+
+      async function apiPost(path, data) {
+        const response = await fetch(path, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        });
+        if (!response.ok) {
+          throw new Error("HTTP error " + response.status);
+        }
+        return await response.json();
+      }
+
+      async function login() {
+        try {
+          const username = document.getElementById("username").value;
+          const password = document.getElementById("password").value;
+          await apiPost("/login/", { username: username, password: password });
+          document.getElementById("login-box").style.display = "none";
+          document.getElementById("chat-box").style.display = "block";
+          document.getElementById("notify").textContent =
+            "Logged in as " + username;
+          currentUser = username;
+        } catch (error) {
+          document.getElementById("notify").textContent =
+            "Login failed: " + error.message;
+        }
+      }
+
+      async function submitInfo() {
+        await apiPost("/submit-info/", {});
+        document.getElementById("notify").textContent =
+          "Submitted info to tracker";
+        await getList();
+      }
+
+      async function connectPeer() {
+        const value = document.getElementById("peer-select").value;
+        if (!value) return;
+        const [ip, port] = value.split(":");
+        await apiPost("/connect-peer/", { ip: ip, port: parseInt(port) });
+        document.getElementById("notify").textContent =
+          "Connected to peer " + ip + ":" + port;
+        await getList();
+      }
+
+      async function joinChannel() {
+        const channel = document.getElementById("new-channel").value;
+        if (!channel) return;
+        await apiPost("/add-list/", { channel: channel });
+        document.getElementById("new-channel").value = "";
+        await getList();
+      }
+
+      async function broadcastPeer() {
+        const text = document.getElementById("channel-message").value;
+        if (!text) return;
+        const channel = document.getElementById("channel-select").value;
+        await apiPost("/broadcast-peer/", { channel: channel, text: text });
+        document.getElementById("channel-message").value = "";
+        await getList();
+      }
+
+      async function sendDirectPeer() {
+        const text = document.getElementById("peer-message").value;
+        const peerSelect = document.getElementById("peer-select");
+        const value = peerSelect.value;
+        if (!text || !value) return;
+        const peerName = peerSelect.options[peerSelect.selectedIndex].text;
+        const [ip, port] = value.split(":");
+        await apiPost("/send-peer/", {
+          receiver: peerName,
+          text: text,
+          ip: ip,
+          port: parseInt(port),
+        });
+        document.getElementById("peer-message").value = "";
+        await getList();
+      }
+
+      function renderMessages() {
+        const channel = document.getElementById("channel-select").value;
+        const channelWindow = document.getElementById("channel-window");
+        channelWindow.innerHTML = "";
+
+        const peerSelect = document.getElementById("peer-select");
+        const peerName =
+          peerSelect.selectedIndex >= 0
+            ? peerSelect.options[peerSelect.selectedIndex].text
+            : "";
+        const peerWindow = document.getElementById("peer-window");
+        peerWindow.innerHTML = "";
+
+        for (const message of allMessages) {
+          const div = document.createElement("div");
+          div.textContent = message.sender + ": " + message.text;
+          if (message.channel === channel) {
+            channelWindow.appendChild(div);
+          } else if (
+            message.receiver &&
+            (message.sender === peerName || message.receiver === peerName)
+          ) {
+            peerWindow.appendChild(div);
+          }
+        }
+        channelWindow.scrollTop = channelWindow.scrollHeight;
+        peerWindow.scrollTop = peerWindow.scrollHeight;
+      }
+
+      async function getList() {
+        try {
+          const data = await apiPost("/get-list/", {});
+          const peers = data.peers || [];
+          document.getElementById("peer-list").textContent = peers
+            .map((peer) => peer.username)
+            .join(", ");
+
+          const peerSelect = document.getElementById("peer-select");
+          const currentPeer = peerSelect.value;
+          peerSelect.innerHTML = "";
+          for (const peer of peers) {
+            if (peer.username === currentUser) continue;
+            const address = peer.ip + ":" + peer.port;
+            const option = document.createElement("option");
+            option.value = address;
+            option.textContent = peer.username;
+            peerSelect.appendChild(option);
+          }
+          if (currentPeer) peerSelect.value = currentPeer;
+
+          const channelSelect = document.getElementById("channel-select");
+          const currentChannel = channelSelect.value;
+          channelSelect.innerHTML = "";
+          for (const channel of data.channels) {
+            const option = document.createElement("option");
+            option.value = channel;
+            option.textContent = channel;
+            channelSelect.appendChild(option);
+          }
+          if (currentChannel) channelSelect.value = currentChannel;
+
+          allMessages = data.messages || [];
+          if (allMessages.length > lastCount) {
+            document.getElementById("notify").textContent = "New message!";
+            lastCount = allMessages.length;
+          }
+          renderMessages();
+        } catch (error) {}
+      }
+    </script>
+  </body>
+</html>
