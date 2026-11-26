@@ -70,6 +70,7 @@
         const response = await fetch(path, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
           body: JSON.stringify(data),
         });
         if (!response.ok) {
@@ -99,6 +100,7 @@
         document.getElementById("notify").textContent =
           "Submitted info to tracker";
         await getList();
+        setInterval(getList, 2000);
       }
 
       async function connectPeer() {
