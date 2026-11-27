@@ -37,9 +37,12 @@ from streaprous_socket.streaprous_raw_connection import (
 )
 SESSIONS = {}
 LOGIN_REQUIRED = {
-    ("POST", "/submit-info/"),
-    ("POST", "/add-list/"),
-    ("GET", "/get-list/"),
+    ("POST", "/connect-peer"),
+    ("POST", "/connect-peer/"),
+    ("POST", "/broadcast-peer"),
+    ("POST", "/broadcast-peer/"),
+    ("GET", "/get-messages"),
+    ("GET", "/get-messages/"),
 }
 class HttpAdapter:
     """
@@ -150,12 +153,12 @@ class HttpAdapter:
         if not response:
             return 0, ""
 
-        # Status line "HTTP/1.1 200 OK" -> 200 
+        # Status line "HTTP/1.1 200 OK" -> 200
         head, _, resp_body = response.partition(b"\r\n\r\n")
         status_line = head.split(b"\r\n")[0]
         status = int(status_line.split(b" ")[1])
         return status, resp_body.decode("utf-8")
-    
+
     def call_hook(self, req, resp):
         user = SESSIONS.get(req.cookies.get("session"))
         # 401
@@ -166,7 +169,7 @@ class HttpAdapter:
             resp.reason = "Unauthorized"
         else:
             try:
-                # Tell handler who logged in 
+                # Tell handler who logged in
                 req.headers["username"] = user or ""
                 result = req.hook(headers=req.headers, body=req.body)
                 # async def handler: run the coroutine
@@ -232,7 +235,7 @@ class HttpAdapter:
             print("[HttpAdapter] Error building response: {}".format(e))
             response = b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n"
 
-        #print("[HttpAdapter] Response content {}".format(response))
+        # print("[HttpAdapter] Response content {}".format(response))
         conn.sendall(response)
         conn.close()
 
@@ -288,7 +291,8 @@ class HttpAdapter:
 
         # Wait longer to ensure response is transmitted, client processes it, and sends ACK
         import time
-        time.sleep(5.0)
+        # time.sleep(5.0)
+        time.sleep(0.1)
 
         # Close connection with FIN packet
         #

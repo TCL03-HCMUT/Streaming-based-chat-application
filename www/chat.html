@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>StreapRous Chat</title>
+  </head>
+  <body>
+    <h2>StreapRous Chat</h2>
+    <p id="notify" style="color: blue"></p>
+
+    <div id="login-box">
+      <h3>Login</h3>
+      Username: <input type="text" id="username" />
+      Password: <input type="password" id="password" />
+      <button onclick="login()">Login</button>
+    </div>
+
+    <div id="chat-box" style="display: none">
+      <h3>Channel</h3>
+      Join channel: <input type="text" id="new-channel" />
+      <button onclick="joinChannel()">Join</button>
+      <br /><br />
+      Channel: <select id="channel-select" onchange="render()"></select>
+      <div id="channel-window" style="border: 1px solid; height: 150px; overflow-y: scroll; padding: 8px; margin-top: 6px"></div>
+      Message: <input type="text" id="channel-message" style="width: 300px" />
+      <button onclick="broadcast()">Broadcast</button>
+
+      <h3>Direct peer</h3>
+      <button onclick="loadPeers()">Refresh peers</button>
+      Peer: <select id="peer-select" onchange="render()"></select>
+      <button onclick="connectPeer()">Connect</button>
+      <div id="peer-window" style="border: 1px solid; height: 150px; overflow-y: scroll; padding: 8px; margin-top: 6px"></div>
+      Message: <input type="text" id="peer-message" style="width: 300px" />
+      <button onclick="sendDirect()">Send</button>
+    </div>
+
+    <script>
+      let me = "";
+      let joined = ["general"];
+      let peers = [];
+      let messages = [];
+      let lastCount = 0;
+
+      function notify(text) {
+        document.getElementById("notify").textContent = text;
+      }
+
+      // Goi API cua peer minh (cung cong voi trang nay); cookie trinh duyet tu gui kem.
+      async function api(method, path, data) {
+        const options = { method: method, headers: { "Content-Type": "application/json" } };
+        if (data) options.body = JSON.stringify(data);
+        const response = await fetch(path, options);
+        if (response.status === 401) {
+          showLogin();
+          throw new Error("Please login");
+        }
+        const result = await response.json();
+        if (result.status === "error") throw new Error(result.message);
+        return result;
+      }
+
+      function showLogin() {
+        me = "";
+        document.getElementById("login-box").style.display = "block";
+        document.getElementById("chat-box").style.display = "none";
+      }
+
+      async function login() {
+        try {
+          const username = document.getElementById("username").value;
+          const password = document.getElementById("password").value;
+          await api("POST", "/login/", { username: username, password: password });
+          me = username;
+          document.getElementById("login-box").style.display = "none";
+          document.getElementById("chat-box").style.display = "block";
+          notify("Logged in as " + me);
+          await loadPeers();
+          await loadMessages();
+        } catch (e) {
+          notify("Login failed: " + e.message);
+        }
+      }
+
+      async function joinChannel() {
+        const channel = document.getElementById("new-channel").value.trim();
+        if (!channel || channel.startsWith("@")) return;
+        try {
+          await api("POST", "/add-list/", { username: me, channel: channel });
+          if (!joined.includes(channel)) joined.push(channel);
+          document.getElementById("new-channel").value = "";
+          render();
+          document.getElementById("channel-select").value = channel;
+          render();
+        } catch (e) {
+          notify("Join failed: " + e.message);
+        }
+      }
+
+      async function broadcast() {
+        const text = document.getElementById("channel-message").value;
+        const channel = document.getElementById("channel-select").value;
+        if (!text || !channel) return;
+        try {
+          const list = await api("POST", "/get-list/", { channel: channel });
+          const result = await api("POST", "/broadcast-peer/", { message: text, channel: channel, peers: list.peers });
+          document.getElementById("channel-message").value = "";
+          notify("Broadcast to " + result.delivered_count + " peer(s) in #" + channel);
+          await loadMessages();
+        } catch (e) {
+          notify("Broadcast failed: " + e.message);
+        }
+      }
+
+      async function loadPeers() {
+        try {
+          const list = await api("POST", "/get-list/", { channel: "general" });
+          peers = list.peers.filter((p) => p.username !== me);
+          const select = document.getElementById("peer-select");
+          const current = select.value;
+          select.innerHTML = "";
+          for (const p of peers) {
+            const option = document.createElement("option");
+            option.value = p.username;
+            option.textContent = p.username + " (" + p.ip + ":" + p.port + ")";
+            select.appendChild(option);
+          }
+          if (current) select.value = current;
+          render();
+        } catch (e) {
+          notify("Get peers failed: " + e.message);
+        }
+      }
+
+      function selectedPeer() {
+        const name = document.getElementById("peer-select").value;
+        return peers.find((p) => p.username === name);
+      }
+
+      async function connectPeer() {
+        const p = selectedPeer();
+        if (!p) return;
+        try {
+          await api("POST", "/connect-peer/", { username: p.username, ip: p.ip, port: p.port });
+          notify("Connected to " + p.username);
+        } catch (e) {
+          notify("Connect failed: " + e.message);
+        }
+      }
+
+      async function sendDirect() {
+        const p = selectedPeer();
+        const text = document.getElementById("peer-message").value;
+        if (!p || !text) return;
+        try {
+          // Tin rieng dung kenh "@<nguoi nhan>"
+          await api("POST", "/send-peer/", { target_ip: p.ip, target_port: p.port, message: text, channel: "@" + p.username });
+          document.getElementById("peer-message").value = "";
+          await loadMessages();
+        } catch (e) {
+          notify("Send failed: " + e.message);
+        }
+      }
+
+      async function loadMessages() {
+        try {
+          const result = await api("GET", "/get-messages/");
+          messages = result.messages;
+          for (const m of messages) {
+            if (!m.channel.startsWith("@") && !joined.includes(m.channel)) joined.push(m.channel);
+          }
+          if (messages.length > lastCount) {
+            const last = messages[messages.length - 1];
+            if (lastCount > 0 && last.sender !== me) {
+              const where = last.channel.startsWith("@") ? "direct" : "#" + last.channel;
+              notify("New message from " + last.sender + " (" + where + ")");
+            }
+            lastCount = messages.length;
+          }
+          render();
+        } catch (e) {}
+      }
+
+      function addLine(box, m) {
+        const div = document.createElement("div");
+        div.textContent = m.sender + ": " + m.message;
+        box.appendChild(div);
+      }
+
+      function render() {
+        const channelSelect = document.getElementById("channel-select");
+        const channel = channelSelect.value || "general";
+        channelSelect.innerHTML = "";
+        for (const c of joined) {
+          const option = document.createElement("option");
+          option.value = c;
+          option.textContent = "#" + c;
+          channelSelect.appendChild(option);
+        }
+        channelSelect.value = channel;
+
+        const channelBox = document.getElementById("channel-window");
+        const peerBox = document.getElementById("peer-window");
+        channelBox.innerHTML = "";
+        peerBox.innerHTML = "";
+        const peer = document.getElementById("peer-select").value;
+        for (const m of messages) {
+          if (m.channel === channel) addLine(channelBox, m);
+          const mine = m.sender === me && m.channel === "@" + peer;
+          const theirs = m.sender === peer && m.channel === "@" + me;
+          if (peer && (mine || theirs)) addLine(peerBox, m);
+        }
+        channelBox.scrollTop = channelBox.scrollHeight;
+        peerBox.scrollTop = peerBox.scrollHeight;
+      }
+
+      // Hoi peer moi 2 giay de nhan tin moi (thong bao tin moi)
+      setInterval(() => {
+        if (me) loadMessages();
+      }, 2000);
+    </script>
+  </body>
+</html>
