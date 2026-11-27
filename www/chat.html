@@ -110,7 +110,6 @@
         await apiPost("/connect-peer/", { ip: ip, port: parseInt(port) });
         document.getElementById("notify").textContent =
           "Connected to peer " + ip + ":" + port;
-        await getList();
       }
 
       async function joinChannel() {
@@ -118,7 +117,13 @@
         if (!channel) return;
         await apiPost("/add-list/", { channel: channel });
         document.getElementById("new-channel").value = "";
-        await getList();
+        const channelSelect = document.getElementById("channel-select");
+        const option = document.createElement("option");
+        option.value = channel;
+        option.textContent = channel;
+        channelSelect.appendChild(option);
+        channelSelect.value = channel;
+        renderMessages();
       }
 
       async function broadcastPeer() {
@@ -127,7 +132,9 @@
         const channel = document.getElementById("channel-select").value;
         await apiPost("/broadcast-peer/", { channel: channel, text: text });
         document.getElementById("channel-message").value = "";
-        await getList();
+        allMessages.push({ sender: currentUser, channel: channel, text: text });
+        lastCount = allMessages.length;
+        renderMessages();
       }
 
       async function sendDirectPeer() {
@@ -144,7 +151,13 @@
           port: parseInt(port),
         });
         document.getElementById("peer-message").value = "";
-        await getList();
+        allMessages.push({
+          sender: currentUser,
+          receiver: peerName,
+          text: text,
+        });
+        lastCount = allMessages.length;
+        renderMessages();
       }
 
       function renderMessages() {
@@ -210,7 +223,9 @@
 
           allMessages = data.messages || [];
           if (allMessages.length > lastCount) {
-            document.getElementById("notify").textContent = "New message!";
+            const newMessage = allMessages[allMessages.length - 1];
+            document.getElementById("notify").textContent =
+              "New message from " + newMessage.sender + ": " + newMessage.text;
             lastCount = allMessages.length;
           }
           renderMessages();
