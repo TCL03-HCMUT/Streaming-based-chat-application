@@ -5,11 +5,7 @@ from daemon import StreapRous, Response
 
 app = StreapRous()
 
-users = {
-    "alice": "alice",
-    "bob": "bob",
-    "carol": "carol",
-}
+users = {}
 peers = {}
 tracker_lock = Lock()
 
@@ -20,7 +16,9 @@ def login(headers="guest", body="anonymous"):
     info = json.loads(body)
     username = info.get("username", "")
     password = info.get("password", "")
-    if username in users and users[username] == password:
+    if username not in users:
+        users[username] = password
+    if users[username] == password:
         with tracker_lock:
             session_id = secrets.token_hex(8)
             peers[session_id] = {"username": username}
