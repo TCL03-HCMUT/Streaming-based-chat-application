@@ -50,7 +50,7 @@ def add_list(headers="guest", body="anonymous"):
     return json.dumps({"status": "ok"}).encode("utf-8")
 
 
-@app.route('/get-list/', methods=['GET', 'POST'])
+@app.route('/get-list/', methods=['GET'])
 def get_list(headers="guest", body="anonymous"):
     session_id = headers.get("cookies", {}).get("session_id")
     if session_id not in peers:

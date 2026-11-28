@@ -66,13 +66,16 @@
       let allMessages = [];
       let lastCount = 0;
 
-      async function apiPost(path, data) {
-        const response = await fetch(path, {
-          method: "POST",
+      async function api(method, path, data) {
+        const options = {
+          method: method,
           headers: { "Content-Type": "application/json" },
           credentials: "same-origin",
-          body: JSON.stringify(data),
-        });
+        };
+        if (data) {
+          options.body = JSON.stringify(data);
+        }
+        const response = await fetch(path, options);
         if (!response.ok) {
           throw new Error("HTTP error " + response.status);
         }
@@ -83,7 +86,10 @@
         try {
           const username = document.getElementById("username").value;
           const password = document.getElementById("password").value;
-          await apiPost("/login/", { username: username, password: password });
+          await api("POST", "/login/", {
+            username: username,
+            password: password,
+          });
           document.getElementById("login-box").style.display = "none";
           document.getElementById("chat-box").style.display = "block";
           document.getElementById("notify").textContent =
@@ -96,7 +102,7 @@
       }
 
       async function submitInfo() {
-        await apiPost("/submit-info/", {});
+        await api("POST", "/submit-info/", {});
         document.getElementById("notify").textContent =
           "Submitted info to tracker";
         await getList();
@@ -107,7 +113,7 @@
         const value = document.getElementById("peer-select").value;
         if (!value) return;
         const [ip, port] = value.split(":");
-        await apiPost("/connect-peer/", { ip: ip, port: parseInt(port) });
+        await api("POST", "/connect-peer/", { ip: ip, port: parseInt(port) });
         document.getElementById("notify").textContent =
           "Connected to peer " + ip + ":" + port;
       }
@@ -115,7 +121,7 @@
       async function joinChannel() {
         const channel = document.getElementById("new-channel").value;
         if (!channel) return;
-        await apiPost("/add-list/", { channel: channel });
+        await api("POST", "/add-list/", { channel: channel });
         document.getElementById("new-channel").value = "";
         const channelSelect = document.getElementById("channel-select");
         const option = document.createElement("option");
@@ -130,7 +136,7 @@
         const text = document.getElementById("channel-message").value;
         if (!text) return;
         const channel = document.getElementById("channel-select").value;
-        await apiPost("/broadcast-peer/", { channel: channel, text: text });
+        await api("POST", "/broadcast-peer/", { channel: channel, text: text });
         document.getElementById("channel-message").value = "";
         allMessages.push({ sender: currentUser, channel: channel, text: text });
         lastCount = allMessages.length;
@@ -144,7 +150,7 @@
         if (!text || !value) return;
         const peerName = peerSelect.options[peerSelect.selectedIndex].text;
         const [ip, port] = value.split(":");
-        await apiPost("/send-peer/", {
+        await api("POST", "/send-peer/", {
           receiver: peerName,
           text: text,
           ip: ip,
@@ -191,7 +197,7 @@
 
       async function getList() {
         try {
-          const data = await apiPost("/get-list/", {});
+          const data = await api("GET", "/get-list/");
           const peers = data.peers || [];
           document.getElementById("peer-list").textContent = peers
             .map((peer) => peer.username)

@@ -104,7 +104,7 @@ def add_list(headers="guest", body="anonymous"):
     return json.dumps({"status": "ok"}).encode("utf-8")
 
 
-@app.route('/get-list/', methods=['GET', 'POST'])
+@app.route('/get-list/', methods=['GET'])
 def get_list(headers="guest", body="anonymous"):
     res = send_request(tracker_addr[0], tracker_addr[1], "/get-list/", {}, headers.get("cookie", ""))
     if res == "401 Unauthorized":
