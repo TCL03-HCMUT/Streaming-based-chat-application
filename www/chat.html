@@ -6,7 +6,7 @@
   </head>
   <body>
     <h2>StreapRous</h2>
-    <p id="notify" style="color: blue"></p>
+    <p id="notification" style="color: blue"></p>
 
     <div id="login-box">
       <h3>Login</h3>
@@ -63,6 +63,7 @@
 
     <script>
       let currentUser = "";
+      let peers = [];
       let allMessages = [];
       let lastCount = 0;
 
@@ -92,30 +93,36 @@
           });
           document.getElementById("login-box").style.display = "none";
           document.getElementById("chat-box").style.display = "block";
-          document.getElementById("notify").textContent =
-            "Logged in as " + username;
+          document.getElementById("notification").textContent =
+            "Logged in with name: " + username;
           currentUser = username;
         } catch (error) {
-          document.getElementById("notify").textContent =
+          document.getElementById("notification").textContent =
             "Login failed: " + error.message;
         }
       }
 
       async function submitInfo() {
         await api("POST", "/submit-info/", {});
-        document.getElementById("notify").textContent =
+        document.getElementById("notification").textContent =
           "Submitted info to tracker";
         await getList();
         setInterval(getList, 2000);
       }
 
       async function connectPeer() {
-        const value = document.getElementById("peer-select").value;
-        if (!value) return;
-        const [ip, port] = value.split(":");
-        await api("POST", "/connect-peer/", { ip: ip, port: parseInt(port) });
-        document.getElementById("notify").textContent =
-          "Connected to peer " + ip + ":" + port;
+        const peerName = document.getElementById("peer-select").value;
+        const peer = peers.find((p) => p.username === peerName);
+        if (!peer) return;
+        await api("POST", "/connect-peer/", { ip: peer.ip, port: peer.port });
+        document.getElementById("notification").textContent =
+          "Connected to peer " +
+          peer.username +
+          " (" +
+          peer.ip +
+          ":" +
+          peer.port +
+          ")";
       }
 
       async function joinChannel() {
@@ -145,21 +152,19 @@
 
       async function sendDirectPeer() {
         const text = document.getElementById("peer-message").value;
-        const peerSelect = document.getElementById("peer-select");
-        const value = peerSelect.value;
-        if (!text || !value) return;
-        const peerName = peerSelect.options[peerSelect.selectedIndex].text;
-        const [ip, port] = value.split(":");
+        const peerName = document.getElementById("peer-select").value;
+        const peer = peers.find((p) => p.username === peerName);
+        if (!text || !peer) return;
         await api("POST", "/send-peer/", {
-          receiver: peerName,
+          receiver: peer.username,
           text: text,
-          ip: ip,
-          port: parseInt(port),
+          ip: peer.ip,
+          port: peer.port,
         });
         document.getElementById("peer-message").value = "";
         allMessages.push({
           sender: currentUser,
-          receiver: peerName,
+          receiver: peer.username,
           text: text,
         });
         lastCount = allMessages.length;
@@ -171,11 +176,7 @@
         const channelWindow = document.getElementById("channel-window");
         channelWindow.innerHTML = "";
 
-        const peerSelect = document.getElementById("peer-select");
-        const peerName =
-          peerSelect.selectedIndex >= 0
-            ? peerSelect.options[peerSelect.selectedIndex].text
-            : "";
+        const peerName = document.getElementById("peer-select").value;
         const peerWindow = document.getElementById("peer-window");
         peerWindow.innerHTML = "";
 
@@ -198,7 +199,7 @@
       async function getList() {
         try {
           const data = await api("GET", "/get-list/");
-          const peers = data.peers || [];
+          peers = data.peers || [];
           document.getElementById("peer-list").textContent = peers
             .map((peer) => peer.username)
             .join(", ");
@@ -208,9 +209,8 @@
           peerSelect.innerHTML = "";
           for (const peer of peers) {
             if (peer.username === currentUser) continue;
-            const address = peer.ip + ":" + peer.port;
             const option = document.createElement("option");
-            option.value = address;
+            option.value = peer.username;
             option.textContent = peer.username;
             peerSelect.appendChild(option);
           }
@@ -230,7 +230,7 @@
           allMessages = data.messages || [];
           if (allMessages.length > lastCount) {
             const newMessage = allMessages[allMessages.length - 1];
-            document.getElementById("notify").textContent =
+            document.getElementById("notification").textContent =
               "New message from " + newMessage.sender + ": " + newMessage.text;
             lastCount = allMessages.length;
           }

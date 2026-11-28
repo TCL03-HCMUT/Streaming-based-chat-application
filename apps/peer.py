@@ -21,11 +21,11 @@ messages = []
 peer_lock = Lock()
 
 
-def send_request(host, port, path, payload, cookie=""):
+def send_request(method, host, port, path, payload=None, cookie=""):
     global raw_sock
-    body = json.dumps(payload)
+    body = json.dumps(payload) if payload is not None else ""
     req = (
-        "POST {} HTTP/1.1\r\n"
+        "{} {} HTTP/1.1\r\n"
         "Host: {}:{}\r\n"
         "Content-Type: application/json\r\n"
         "Content-Length: {}\r\n"
@@ -33,7 +33,7 @@ def send_request(host, port, path, payload, cookie=""):
         "Connection: close\r\n"
         "\r\n"
         "{}"
-    ).format(path, host, port, len(body.encode("utf-8")), cookie, body)
+    ).format(method, path, host, port, len(body.encode("utf-8")), cookie, body)
 
     if raw_sock is None:
         raw_sock = create_raw_socket()
@@ -58,7 +58,7 @@ def send_request(host, port, path, payload, cookie=""):
 def login(headers="guest", body="anonymous"):
     print("[Peer] Send login to tracker {}".format(tracker_addr))
     info = json.loads(body)
-    res = send_request(tracker_addr[0], tracker_addr[1], "/login/", info)
+    res = send_request("POST", tracker_addr[0], tracker_addr[1], "/login/", info)
     if res == "401 Unauthorized":
         return Response().build_unauthorized()
 
@@ -75,7 +75,7 @@ def login(headers="guest", body="anonymous"):
 
 @app.route('/submit-info/', methods=['POST'])
 def submit_info(headers="guest", body="anonymous"):
-    res = send_request(tracker_addr[0], tracker_addr[1], "/submit-info/", {
+    res = send_request("POST", tracker_addr[0], tracker_addr[1], "/submit-info/", {
         "ip": app.ip,
         "port": app.port,
         "channels": channels,
@@ -90,7 +90,7 @@ def add_list(headers="guest", body="anonymous"):
         ch = info["channel"]
         if ch and ch not in channels:
             channels.append(ch)
-        send_request(tracker_addr[0], tracker_addr[1], "/add-list/", {
+        send_request("POST", tracker_addr[0], tracker_addr[1], "/add-list/", {
             "ip": app.ip,
             "port": app.port,
             "channels": channels,
@@ -106,7 +106,7 @@ def add_list(headers="guest", body="anonymous"):
 
 @app.route('/get-list/', methods=['GET'])
 def get_list(headers="guest", body="anonymous"):
-    res = send_request(tracker_addr[0], tracker_addr[1], "/get-list/", {}, headers.get("cookie", ""))
+    res = send_request("GET", tracker_addr[0], tracker_addr[1], "/get-list/", cookie=headers.get("cookie", ""))
     if res == "401 Unauthorized":
         return Response().build_unauthorized()
 
@@ -130,7 +130,7 @@ def connect_peer(headers="guest", body="anonymous"):
     key = (peer_ip, peer_port)
     with peer_lock:
         connected_peers.add(key)
-    send_request(peer_ip, peer_port, "/add-list/", {
+    send_request("POST", peer_ip, peer_port, "/add-list/", {
         "ip": app.ip,
         "port": app.port,
     })
@@ -144,7 +144,7 @@ def send_peer(headers="guest", body="anonymous"):
         if (info["ip"], info["port"]) not in connected_peers:
             return Response().build_unauthorized()
         info["sender"] = current_user
-        send_request(info["ip"], info["port"], "/send-peer/", info)
+        send_request("POST", info["ip"], info["port"], "/send-peer/", info)
     with peer_lock:
         messages.append(info)
     return json.dumps({"status": "ok"}).encode("utf-8")
@@ -156,7 +156,7 @@ def send_to_peer(peer, msg):
     data = dict(msg)
     data["ip"] = peer["ip"]
     data["port"] = peer["port"]
-    send_request(peer["ip"], peer["port"], "/send-peer/", data)
+    send_request("POST", peer["ip"], peer["port"], "/send-peer/", data)
 
 
 @app.route('/broadcast-peer/', methods=['POST'])
