@@ -114,9 +114,11 @@ def get_list(headers="guest", body="anonymous"):
     with peer_lock:
         for p in res_data.get("peers", []):
             peers[(p["ip"], p["port"])] = p
+        connected = [peers[k]["username"] for k in connected_peers if k in peers]
 
     return json.dumps({
         "peers": list(peers.values()),
+        "connected_peers": connected,
         "channels": channels,
         "messages": messages,
     }).encode("utf-8")

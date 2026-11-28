@@ -20,6 +20,9 @@
       <button onclick="submitInfo()">Submit Info</button>
       <button onclick="getList()">Get Peer List</button>
       <p>Active Peers: <span id="peer-list"></span></p>
+      Connect to Peer:
+      <select id="connect-select"></select>
+      <button onclick="connectPeer()">Connect Peer</button>
 
       <h3>Channel (Broadcast)</h3>
       Add Channel:
@@ -43,9 +46,8 @@
       <button onclick="broadcastPeer()">Broadcast</button>
 
       <h3>Direct peer</h3>
-      Peer:
+      Connected Peer:
       <select id="peer-select" onchange="renderMessages()"></select>
-      <button onclick="connectPeer()">Connect Peer</button>
       <div
         id="peer-window"
         style="
@@ -111,7 +113,7 @@
       }
 
       async function connectPeer() {
-        const peerName = document.getElementById("peer-select").value;
+        const peerName = document.getElementById("connect-select").value;
         const peer = peers.find((p) => p.username === peerName);
         if (!peer) return;
         await api("POST", "/connect-peer/", { ip: peer.ip, port: peer.port });
@@ -123,6 +125,7 @@
           ":" +
           peer.port +
           ")";
+        await getList();
       }
 
       async function joinChannel() {
@@ -183,6 +186,9 @@
         for (const message of allMessages) {
           const div = document.createElement("div");
           div.textContent = message.sender + ": " + message.text;
+          if (message.sender === currentUser) {
+            div.style.textAlign = "right";
+          }
           if (message.channel === channel) {
             channelWindow.appendChild(div);
           } else if (
@@ -200,18 +206,34 @@
         try {
           const data = await api("GET", "/get-list/");
           peers = data.peers || [];
+          const connectedPeers = data.connected_peers || [];
           document.getElementById("peer-list").textContent = peers
             .map((peer) => peer.username)
             .join(", ");
 
-          const peerSelect = document.getElementById("peer-select");
-          const currentPeer = peerSelect.value;
-          peerSelect.innerHTML = "";
+          const connectSelect = document.getElementById("connect-select");
+          const currentConnect = connectSelect.value;
+          connectSelect.innerHTML = "";
           for (const peer of peers) {
-            if (peer.username === currentUser) continue;
+            if (
+              peer.username == currentUser ||
+              connectedPeers.includes(peer.username)
+            )
+              continue;
             const option = document.createElement("option");
             option.value = peer.username;
             option.textContent = peer.username;
+            connectSelect.appendChild(option);
+          }
+          if (currentConnect) connectSelect.value = currentConnect;
+
+          const peerSelect = document.getElementById("peer-select");
+          const currentPeer = peerSelect.value;
+          peerSelect.innerHTML = "";
+          for (const username of connectedPeers) {
+            const option = document.createElement("option");
+            option.value = username;
+            option.textContent = username;
             peerSelect.appendChild(option);
           }
           if (currentPeer) peerSelect.value = currentPeer;
